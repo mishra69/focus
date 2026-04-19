@@ -1,0 +1,11 @@
+name = "focus"
+compatibility_date = "2025-01-01"
+main = "worker.js"
+
+[assets]
+directory = "./focus-app"
+binding = "ASSETS"
+
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "efc7612b812440c3be48e3efe5833039"

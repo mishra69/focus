@@ -1,0 +1,1314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#0a0a0f" />
+  <title>Focus</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Fraunces:ital,opsz,wght@0,9..144,200;0,9..144,300;1,9..144,200&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0f;
+      --surface: #13131a;
+      --surface2: #1c1c26;
+      --border: #2a2a38;
+      --accent: #c8f564;
+      --accent2: #5b8df6;
+      --accent3: #f564a9;
+      --text: #f0f0f8;
+      --muted: #6b6b80;
+      --danger: #f56464;
+      --r: 16px;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'DM Mono', monospace;
+      overflow: hidden;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+    }
+
+    /* NAV */
+    nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: calc(16px + env(safe-area-inset-top)) 20px 12px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .nav-logo {
+      font-family: 'Fraunces', serif;
+      font-size: 22px;
+      font-weight: 200;
+      letter-spacing: -0.5px;
+      color: var(--accent);
+    }
+
+    .nav-tabs {
+      display: flex;
+      gap: 4px;
+      background: var(--surface);
+      border-radius: 10px;
+      padding: 4px;
+    }
+
+    .nav-tab {
+      padding: 6px 14px;
+      border-radius: 7px;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.2s;
+      letter-spacing: 0.5px;
+    }
+
+    .nav-tab.active {
+      background: var(--surface2);
+      color: var(--text);
+    }
+
+    /* VIEWS */
+    .view { display: none; flex: 1; overflow-y: auto; }
+    .view.active { display: flex; flex-direction: column; }
+
+    /* ── TIMER VIEW ── */
+    #timer-view {
+      align-items: center;
+      justify-content: space-between;
+      padding: 24px 20px 32px;
+      gap: 0;
+    }
+
+    .timer-top {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .today-pill {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 100px;
+      padding: 5px 14px;
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.5px;
+    }
+
+    .today-stats {
+      display: flex;
+      gap: 24px;
+      margin-top: 4px;
+    }
+
+    .today-stat {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+    }
+
+    .today-stat-val {
+      font-family: 'Fraunces', serif;
+      font-size: 28px;
+      font-weight: 200;
+      color: var(--accent);
+      line-height: 1;
+    }
+
+    .today-stat-lbl {
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 0.8px;
+    }
+
+    .today-divider {
+      width: 1px;
+      height: 40px;
+      background: var(--border);
+      align-self: center;
+    }
+
+    /* Ring */
+    .ring-wrap {
+      position: relative;
+      width: 240px;
+      height: 240px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .ring-svg {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      transform: rotate(-90deg);
+    }
+
+    .ring-track {
+      fill: none;
+      stroke: var(--surface2);
+      stroke-width: 6;
+    }
+
+    .ring-progress {
+      fill: none;
+      stroke: var(--accent);
+      stroke-width: 6;
+      stroke-linecap: round;
+      stroke-dasharray: 691;
+      stroke-dashoffset: 691;
+      transition: stroke-dashoffset 1s linear, stroke 0.3s;
+    }
+
+    .ring-center {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      z-index: 1;
+    }
+
+    .timer-display {
+      font-family: 'Fraunces', serif;
+      font-size: 58px;
+      font-weight: 200;
+      letter-spacing: -2px;
+      line-height: 1;
+      color: var(--text);
+    }
+
+    .timer-label {
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+    }
+
+    /* Controls */
+    .controls {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      width: 100%;
+    }
+
+    /* Mode toggle */
+    .mode-toggle {
+      display: flex;
+      gap: 2px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 4px;
+    }
+
+    .mode-btn {
+      padding: 7px 20px;
+      border-radius: 7px;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.2s;
+      letter-spacing: 0.5px;
+    }
+
+    .mode-btn.active {
+      background: var(--surface2);
+      color: var(--accent);
+    }
+
+    /* Slider */
+    .slider-wrap {
+      width: 100%;
+      max-width: 280px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .slider-label {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+
+    .slider-val {
+      font-family: 'Fraunces', serif;
+      font-size: 20px;
+      font-weight: 200;
+      color: var(--accent);
+    }
+
+    .slider-hint {
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 0.5px;
+    }
+
+    input[type=range] {
+      -webkit-appearance: none;
+      width: 100%;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--surface2);
+      outline: none;
+      cursor: pointer;
+    }
+
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+      border: 3px solid var(--bg);
+      box-shadow: 0 0 0 1px var(--accent);
+      margin-top: -9px;
+    }
+
+    input[type=range]::-webkit-slider-runnable-track {
+      height: 4px;
+      border-radius: 2px;
+    }
+
+    .slider-ticks {
+      display: flex;
+      justify-content: space-between;
+      padding: 0 2px;
+    }
+
+    .slider-tick {
+      font-size: 9px;
+      color: var(--muted);
+      letter-spacing: 0.3px;
+    }
+
+    .btn-primary {
+      width: 100%;
+      max-width: 280px;
+      padding: 18px;
+      border-radius: var(--r);
+      border: none;
+      background: var(--accent);
+      color: var(--bg);
+      font-family: 'DM Mono', monospace;
+      font-size: 14px;
+      font-weight: 500;
+      letter-spacing: 1px;
+      cursor: pointer;
+      transition: all 0.2s;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .btn-primary:active { transform: scale(0.97); }
+
+    .btn-primary.running {
+      background: var(--surface2);
+      color: var(--accent);
+      border: 1px solid var(--accent);
+    }
+
+    .btn-secondary {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 12px 28px;
+      border-radius: var(--r);
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+      letter-spacing: 0.5px;
+    }
+
+    .btn-secondary:hover { border-color: var(--muted); color: var(--text); }
+
+    .btn-row { display: flex; gap: 10px; width: 100%; max-width: 280px; }
+
+    /* Pulse dot */
+    .live-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      display: inline-block;
+      margin-right: 8px;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.7); }
+    }
+
+    /* ── REPORT VIEW ── */
+    #report-view {
+      padding: 20px;
+      gap: 16px;
+    }
+
+    .report-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .report-title {
+      font-family: 'Fraunces', serif;
+      font-size: 26px;
+      font-weight: 200;
+    }
+
+    .period-toggle {
+      display: flex;
+      gap: 2px;
+      background: var(--surface);
+      border-radius: 8px;
+      padding: 3px;
+    }
+
+    .period-btn {
+      padding: 5px 12px;
+      border-radius: 6px;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      cursor: pointer;
+      letter-spacing: 0.5px;
+      transition: all 0.2s;
+    }
+
+    .period-btn.active {
+      background: var(--surface2);
+      color: var(--text);
+    }
+
+    /* Stat cards */
+    .stat-cards {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 16px;
+    }
+
+    .stat-card.wide {
+      grid-column: 1 / -1;
+    }
+
+    .stat-card-lbl {
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 0.8px;
+      margin-bottom: 8px;
+    }
+
+    .stat-card-val {
+      font-family: 'Fraunces', serif;
+      font-size: 36px;
+      font-weight: 200;
+      color: var(--accent);
+      line-height: 1;
+    }
+
+    .stat-card-sub {
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    /* Bar chart */
+    .chart-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 16px;
+    }
+
+    .chart-title {
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 0.8px;
+      margin-bottom: 16px;
+    }
+
+    .bar-chart {
+      display: flex;
+      align-items: flex-end;
+      gap: 6px;
+      height: 120px;
+    }
+
+    .bar-col {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      height: 100%;
+      justify-content: flex-end;
+    }
+
+    .bar {
+      width: 100%;
+      border-radius: 4px 4px 0 0;
+      background: var(--surface2);
+      transition: height 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+      min-height: 2px;
+      position: relative;
+    }
+
+    .bar.has-data { background: var(--accent2); }
+    .bar.today { background: var(--accent); }
+
+    .bar-lbl {
+      font-size: 9px;
+      color: var(--muted);
+      letter-spacing: 0.3px;
+    }
+
+    .bar-val {
+      font-size: 9px;
+      color: var(--muted);
+      position: absolute;
+      top: -16px;
+      left: 50%;
+      transform: translateX(-50%);
+      white-space: nowrap;
+    }
+
+    /* Sessions list */
+    .sessions-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      overflow: hidden;
+    }
+
+    .sessions-head {
+      padding: 14px 16px;
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 0.8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .session-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .session-item:last-child { border-bottom: none; }
+
+    .session-date { font-size: 12px; color: var(--muted); }
+
+    .session-dur {
+      font-family: 'Fraunces', serif;
+      font-size: 18px;
+      font-weight: 200;
+      color: var(--accent);
+    }
+
+    .session-time { font-size: 10px; color: var(--muted); }
+
+    .empty-state {
+      padding: 40px 16px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.8;
+    }
+
+    /* Streak */
+    .streak-row {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .streak-dot {
+      width: 10px; height: 10px;
+      border-radius: 3px;
+      background: var(--surface2);
+    }
+
+    .streak-dot.on { background: var(--accent); }
+    .streak-dot.partial { background: var(--accent2); }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* Completion flash */
+    .flash-overlay {
+      position: fixed;
+      inset: 0;
+      background: var(--accent);
+      opacity: 0;
+      pointer-events: none;
+      z-index: 999;
+    }
+
+    .flash-overlay.flash {
+      animation: flashAnim 1.2s ease forwards;
+    }
+
+    @keyframes flashAnim {
+      0% { opacity: 0; }
+      15% { opacity: 0.18; }
+      100% { opacity: 0; }
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 40px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      padding: 12px 22px;
+      border-radius: 100px;
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      letter-spacing: 0.5px;
+      pointer-events: none;
+      opacity: 0;
+      z-index: 1000;
+      white-space: nowrap;
+    }
+
+    .toast.success {
+      background: var(--accent);
+      color: var(--bg);
+    }
+
+    .toast.discard {
+      background: var(--surface2);
+      color: var(--muted);
+      border: 1px solid var(--border);
+    }
+
+    .toast.show {
+      animation: toastAnim 2.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+    }
+
+    @keyframes toastAnim {
+      0%   { opacity: 0; transform: translateX(-50%) translateY(16px); }
+      12%  { opacity: 1; transform: translateX(-50%) translateY(0px); }
+      75%  { opacity: 1; transform: translateX(-50%) translateY(0px); }
+      100% { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+    }
+
+    /* Dim mode (wake lock active) */
+    body.dimmed nav,
+    body.dimmed #timer-view {
+      filter: brightness(0.15) saturate(0);
+      transition: filter 1.5s ease;
+    }
+
+    body.dimmed {
+      background: #000;
+    }
+
+    .dim-tap-hint {
+      position: fixed;
+      bottom: 60px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 10px;
+      color: #222;
+      letter-spacing: 1px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 1s ease;
+      white-space: nowrap;
+    }
+
+    body.dimmed .dim-tap-hint {
+      opacity: 1;
+    }
+
+    /* Bottom padding for Safari home indicator */
+    .view { padding-bottom: env(safe-area-inset-bottom); }
+  </style>
+</head>
+<body>
+
+<div class="flash-overlay" id="flashOverlay"></div>
+<div class="toast" id="toast"></div>
+<div class="dim-tap-hint">TAP TO BRIGHTEN</div>
+
+<nav>
+  <span class="nav-logo">focus.</span>
+  <div class="nav-tabs">
+    <button class="nav-tab active" onclick="showView('timer')">TIMER</button>
+    <button class="nav-tab" onclick="showView('report')">REPORT</button>
+  </div>
+</nav>
+
+<!-- TIMER VIEW -->
+<div id="timer-view" class="view active">
+  <div class="timer-top">
+    <div class="today-pill" id="todayDate">today</div>
+    <div class="today-stats">
+      <div class="today-stat">
+        <span class="today-stat-val" id="todayHours">0h 0m</span>
+        <span class="today-stat-lbl">FOCUSED</span>
+      </div>
+      <div class="today-divider"></div>
+      <div class="today-stat">
+        <span class="today-stat-val" id="todaySessions">0</span>
+        <span class="today-stat-lbl">SESSIONS</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="ring-wrap">
+    <svg class="ring-svg" viewBox="0 0 240 240">
+      <circle class="ring-track" cx="120" cy="120" r="110" />
+      <circle class="ring-progress" id="ringProgress" cx="120" cy="120" r="110" />
+    </svg>
+    <div class="ring-center">
+      <div class="timer-display" id="timerDisplay">25:00</div>
+      <div class="timer-label" id="timerLabel">READY</div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="mode-toggle" id="modeToggle">
+      <button class="mode-btn active" onclick="setMode('countdown')">COUNTDOWN</button>
+      <button class="mode-btn" onclick="setMode('countup')">COUNT UP</button>
+    </div>
+
+    <div class="slider-wrap" id="sliderWrap">
+      <div class="slider-label">
+        <span class="slider-hint">DURATION</span>
+        <span class="slider-val" id="sliderVal">30 min</span>
+      </div>
+      <input type="range" id="durationSlider" min="1" max="12" step="1" value="3"
+        oninput="onSlider(this.value)" />
+      <div class="slider-ticks">
+        <span class="slider-tick">10</span>
+        <span class="slider-tick">30</span>
+        <span class="slider-tick">60</span>
+        <span class="slider-tick">90</span>
+        <span class="slider-tick">120</span>
+      </div>
+    </div>
+
+    <button class="btn-primary" id="mainBtn" onclick="handleMainBtn()">START FOCUS</button>
+
+    <div class="btn-row" id="secondaryBtns" style="display:none;">
+      <button class="btn-secondary" style="flex:1" onclick="handlePause()" id="pauseBtn">PAUSE</button>
+      <button class="btn-secondary" style="flex:1" onclick="handleStop()">STOP</button>
+    </div>
+  </div>
+</div>
+
+<!-- REPORT VIEW -->
+<div id="report-view" class="view">
+  <div class="report-header">
+    <div class="report-title">Stats</div>
+    <div class="period-toggle">
+      <button class="period-btn active" onclick="setPeriod('week')">WEEK</button>
+      <button class="period-btn" onclick="setPeriod('month')">MONTH</button>
+      <button class="period-btn" onclick="setPeriod('all')">ALL</button>
+    </div>
+  </div>
+
+  <div class="stat-cards">
+    <div class="stat-card">
+      <div class="stat-card-lbl">TOTAL TIME</div>
+      <div class="stat-card-val" id="statTotal">0h</div>
+      <div class="stat-card-sub" id="statTotalSub">this week</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-card-lbl">SESSIONS</div>
+      <div class="stat-card-val" id="statSessions">0</div>
+      <div class="stat-card-sub" id="statSessionsSub">this week</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-card-lbl">DAILY AVG</div>
+      <div class="stat-card-val" id="statAvg">0h</div>
+      <div class="stat-card-sub">per active day</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-card-lbl">BEST DAY</div>
+      <div class="stat-card-val" id="statBest">0h</div>
+      <div class="stat-card-sub" id="statBestDay">—</div>
+    </div>
+  </div>
+
+  <div class="chart-wrap">
+    <div class="chart-title" id="chartTitle">DAILY FOCUS — THIS WEEK</div>
+    <div class="bar-chart" id="barChart"></div>
+  </div>
+
+  <div class="sessions-wrap">
+    <div class="sessions-head">RECENT SESSIONS</div>
+    <div id="sessionsList"></div>
+  </div>
+</div>
+
+<script>
+// ── STATE ──
+let sessions = [];
+
+async function loadSessions() {
+  try {
+    const res = await fetch('/api/sessions');
+    sessions = await res.json();
+    updateTodayStats();
+    if (document.getElementById('report-view').classList.contains('active')) renderReport();
+  } catch (e) {}
+}
+
+async function saveSession(durationSeconds) {
+  const session = { id: Date.now(), date: new Date().toISOString(), duration: durationSeconds };
+  sessions.unshift(session);
+  try {
+    await fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(session)
+    });
+  } catch (e) {}
+}
+let timerMode = 'countdown'; // 'countdown' | 'countup'
+let selectedDuration = 30;   // minutes (countdown only)
+let totalSeconds = 30 * 60;
+let remainingSeconds = totalSeconds;
+let elapsedSeconds = 0;
+let timerState = 'idle'; // idle | running | paused
+let intervalId = null;
+
+const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
+
+// Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
+function sliderToMin(val) { return val * 10; }
+
+// ── INIT ──
+function init() {
+  updateTodayDate();
+  updateTodayStats();
+  onSlider(3); // default 30 min
+}
+
+function updateTodayDate() {
+  const now = new Date();
+  document.getElementById('todayDate').textContent =
+    now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }).toLowerCase();
+}
+
+// ── MODE ──
+function setMode(mode) {
+  if (timerState !== 'idle') return;
+  timerMode = mode;
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+
+  const sliderWrap = document.getElementById('sliderWrap');
+  const ring = document.getElementById('ringProgress');
+
+  if (mode === 'countup') {
+    sliderWrap.style.opacity = '0.3';
+    sliderWrap.style.pointerEvents = 'none';
+    elapsedSeconds = 0;
+    ring.style.strokeDashoffset = CIRCUMFERENCE; // empty ring for countup
+    document.getElementById('timerLabel').textContent = 'READY';
+  } else {
+    sliderWrap.style.opacity = '1';
+    sliderWrap.style.pointerEvents = 'auto';
+  }
+  updateDisplay();
+}
+
+// ── SLIDER ──
+function onSlider(val) {
+  const mins = sliderToMin(parseInt(val));
+  selectedDuration = mins;
+  totalSeconds = mins * 60;
+  remainingSeconds = totalSeconds;
+  let label;
+  if (mins < 60) {
+    label = `${mins} min`;
+  } else {
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    label = m > 0 ? `${h}h ${m}m` : `${h}h`;
+  }
+  document.getElementById('sliderVal').textContent = label;
+  if (timerState === 'idle') updateDisplay();
+}
+
+// ── TIMER ──
+function handleMainBtn() {
+  if (timerState === 'idle') startTimer();
+}
+
+function startTimer() {
+  timerState = 'running';
+  if (timerMode === 'countup') elapsedSeconds = 0;
+
+  document.getElementById('mainBtn').innerHTML = '<span class="live-dot"></span>FOCUSING';
+  document.getElementById('mainBtn').classList.add('running');
+  document.getElementById('secondaryBtns').style.display = 'flex';
+  document.getElementById('sliderWrap').style.opacity = '0.3';
+  document.getElementById('sliderWrap').style.pointerEvents = 'none';
+  document.getElementById('modeToggle').style.opacity = '0.3';
+  document.getElementById('modeToggle').style.pointerEvents = 'none';
+  document.getElementById('timerLabel').textContent = 'FOCUSING';
+
+  intervalId = setInterval(tick, 1000);
+  acquireWakeLock();
+}
+
+function tick() {
+  if (timerMode === 'countdown') {
+    remainingSeconds--;
+    if (remainingSeconds <= 0) { completeSession(); return; }
+  } else {
+    elapsedSeconds++;
+  }
+  const secs = timerMode === 'countdown' ? remainingSeconds : elapsedSeconds;
+  if (!document.body.classList.contains('dimmed') || secs % 10 === 0) {
+    updateDisplay();
+  }
+}
+
+function updateDisplay() {
+  let displaySecs, progress;
+
+  if (timerMode === 'countdown') {
+    displaySecs = remainingSeconds;
+    progress = totalSeconds > 0 ? 1 - (remainingSeconds / totalSeconds) : 0;
+  } else {
+    displaySecs = elapsedSeconds;
+    // Ring fills every 30 min in countup mode (loops)
+    const cycle = 30 * 60;
+    progress = (elapsedSeconds % cycle) / cycle;
+  }
+
+  const h = Math.floor(displaySecs / 3600);
+  const m = Math.floor((displaySecs % 3600) / 60);
+  const s = displaySecs % 60;
+
+  if (h > 0) {
+    document.getElementById('timerDisplay').textContent =
+      `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  } else {
+    document.getElementById('timerDisplay').textContent =
+      `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  }
+
+  const offset = CIRCUMFERENCE - (progress * CIRCUMFERENCE);
+  document.getElementById('ringProgress').style.strokeDashoffset = offset;
+
+  if (progress > 0.75) {
+    document.getElementById('ringProgress').style.stroke = 'var(--accent3)';
+  } else if (progress > 0.5) {
+    document.getElementById('ringProgress').style.stroke = 'var(--accent2)';
+  } else {
+    document.getElementById('ringProgress').style.stroke = 'var(--accent)';
+  }
+}
+
+function handlePause() {
+  if (timerState === 'running') {
+    timerState = 'paused';
+    clearInterval(intervalId);
+    releaseWakeLock();
+    document.getElementById('pauseBtn').textContent = 'RESUME';
+    document.getElementById('timerLabel').textContent = 'PAUSED';
+    document.getElementById('mainBtn').innerHTML = '<span style="opacity:0.5">⏸</span> PAUSED';
+  } else if (timerState === 'paused') {
+    timerState = 'running';
+    intervalId = setInterval(tick, 1000);
+    acquireWakeLock();
+    document.getElementById('pauseBtn').textContent = 'PAUSE';
+    document.getElementById('timerLabel').textContent = 'FOCUSING';
+    document.getElementById('mainBtn').innerHTML = '<span class="live-dot"></span>FOCUSING';
+  }
+}
+
+function handleStop() {
+  if (timerState === 'idle') return;
+  if (timerMode === 'countdown') {
+    showToast("it's ok, we tried 🌱", 'discard');
+  } else {
+    if (elapsedSeconds >= 10 * 60) {
+      saveSession(elapsedSeconds);
+      showToast('session saved ✓', 'success');
+    } else {
+      showToast("it's ok, we tried 🌱", 'discard');
+    }
+  }
+  resetTimer();
+}
+
+function completeSession() {
+  clearInterval(intervalId);
+  saveSession(totalSeconds);
+  flashScreen();
+  showToast('session complete 🎉', 'success');
+  resetTimer();
+}
+
+function resetTimer() {
+  clearInterval(intervalId);
+  releaseWakeLock();
+  timerState = 'idle';
+  remainingSeconds = totalSeconds;
+  elapsedSeconds = 0;
+  document.getElementById('mainBtn').textContent = 'START FOCUS';
+  document.getElementById('mainBtn').classList.remove('running');
+  document.getElementById('secondaryBtns').style.display = 'none';
+  document.getElementById('sliderWrap').style.opacity = timerMode === 'countup' ? '0.3' : '1';
+  document.getElementById('sliderWrap').style.pointerEvents = timerMode === 'countup' ? 'none' : 'auto';
+  document.getElementById('modeToggle').style.opacity = '1';
+  document.getElementById('modeToggle').style.pointerEvents = 'auto';
+  document.getElementById('timerLabel').textContent = 'READY';
+  document.getElementById('pauseBtn').textContent = 'PAUSE';
+  updateDisplay();
+  updateTodayStats();
+  if (document.getElementById('report-view').classList.contains('active')) renderReport();
+}
+
+
+function flashScreen() {
+  const overlay = document.getElementById('flashOverlay');
+  overlay.classList.remove('flash');
+  void overlay.offsetWidth;
+  overlay.classList.add('flash');
+}
+
+function showToast(message, type) {
+  const toast = document.getElementById('toast');
+  toast.className = 'toast ' + type;
+  toast.textContent = message;
+  void toast.offsetWidth;
+  toast.classList.add('show');
+  toast.addEventListener('animationend', () => {
+    toast.className = 'toast';
+  }, { once: true });
+}
+
+function updateTodayStats() {
+  const today = new Date().toDateString();
+  const todaySessions = sessions.filter(s => new Date(s.date).toDateString() === today);
+  const totalMins = todaySessions.reduce((a, s) => a + s.duration, 0) / 60;
+  const h = Math.floor(totalMins / 60);
+  const m = Math.floor(totalMins % 60);
+  document.getElementById('todayHours').textContent = `${h}h ${m}m`;
+  document.getElementById('todaySessions').textContent = todaySessions.length;
+}
+
+// ── VIEWS ──
+function showView(name) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById(name + '-view').classList.add('active');
+  event.target.classList.add('active');
+  if (name === 'report') renderReport();
+}
+
+// ── REPORT ──
+let currentPeriod = 'week';
+
+function setPeriod(p) {
+  currentPeriod = p;
+  document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  renderReport();
+}
+
+function renderReport() {
+  const { filtered, days } = getFilteredData(currentPeriod);
+  renderStats(filtered, currentPeriod);
+  renderBarChart(days, currentPeriod);
+  renderSessions(filtered);
+}
+
+function getFilteredData(period) {
+  const now = new Date();
+  let start;
+  if (period === 'week') {
+    start = new Date(now); start.setDate(now.getDate() - 6); start.setHours(0,0,0,0);
+  } else if (period === 'month') {
+    start = new Date(now); start.setDate(now.getDate() - 29); start.setHours(0,0,0,0);
+  } else {
+    start = new Date(0);
+  }
+
+  const filtered = sessions.filter(s => new Date(s.date) >= start);
+
+  // Build days map
+  const days = [];
+  if (period === 'week') {
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now); d.setDate(now.getDate() - i); d.setHours(0,0,0,0);
+      days.push({ date: d, seconds: 0 });
+    }
+  } else if (period === 'month') {
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date(now); d.setDate(now.getDate() - i); d.setHours(0,0,0,0);
+      days.push({ date: d, seconds: 0 });
+    }
+  } else {
+    // Group by week for all-time
+    const map = {};
+    sessions.forEach(s => {
+      const d = new Date(s.date);
+      const week = getWeekStart(d).toISOString();
+      if (!map[week]) map[week] = { date: getWeekStart(d), seconds: 0 };
+      map[week].seconds += s.duration;
+    });
+    Object.values(map).sort((a,b) => a.date - b.date).forEach(w => days.push(w));
+  }
+
+  // Fill days
+  if (period !== 'all') {
+    filtered.forEach(s => {
+      const d = new Date(s.date); d.setHours(0,0,0,0);
+      const day = days.find(x => x.date.getTime() === d.getTime());
+      if (day) day.seconds += s.duration;
+    });
+  }
+
+  return { filtered, days };
+}
+
+function getWeekStart(date) {
+  const d = new Date(date);
+  const day = d.getDay();
+  d.setDate(d.getDate() - day);
+  d.setHours(0,0,0,0);
+  return d;
+}
+
+function renderStats(filtered, period) {
+  const totalSec = filtered.reduce((a,s) => a + s.duration, 0);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+
+  document.getElementById('statTotal').textContent = h > 0 ? `${h}h ${m}m` : `${m}m`;
+  document.getElementById('statSessions').textContent = filtered.length;
+
+  const labels = { week: 'this week', month: 'this month', all: 'all time' };
+  document.getElementById('statTotalSub').textContent = labels[period];
+  document.getElementById('statSessionsSub').textContent = labels[period];
+
+  // Active days
+  const activeDays = new Set(filtered.map(s => new Date(s.date).toDateString())).size;
+  const avgSec = activeDays ? totalSec / activeDays : 0;
+  const ah = Math.floor(avgSec / 3600);
+  const am = Math.floor((avgSec % 3600) / 60);
+  document.getElementById('statAvg').textContent = ah > 0 ? `${ah}h ${am}m` : `${am}m`;
+
+  // Best day
+  const dayMap = {};
+  filtered.forEach(s => {
+    const k = new Date(s.date).toDateString();
+    dayMap[k] = (dayMap[k] || 0) + s.duration;
+  });
+  let bestDay = '—'; let bestSec = 0;
+  Object.entries(dayMap).forEach(([d, sec]) => {
+    if (sec > bestSec) { bestSec = sec; bestDay = d; }
+  });
+  const bh = Math.floor(bestSec / 3600);
+  const bm = Math.floor((bestSec % 3600) / 60);
+  document.getElementById('statBest').textContent = bestSec > 0 ? (bh > 0 ? `${bh}h ${bm}m` : `${bm}m`) : '0m';
+  document.getElementById('statBestDay').textContent = bestDay !== '—'
+    ? new Date(bestDay).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+    : '—';
+}
+
+function renderBarChart(days, period) {
+  const chart = document.getElementById('barChart');
+  chart.innerHTML = '';
+
+  if (!days.length) {
+    chart.innerHTML = '<div style="color:var(--muted);font-size:11px;margin:auto">no data yet</div>';
+    return;
+  }
+
+  const maxSec = Math.max(...days.map(d => d.seconds), 1);
+  const todayStr = new Date().toDateString();
+  const now = new Date();
+
+  const titles = {
+    week: 'DAILY FOCUS — THIS WEEK',
+    month: 'DAILY FOCUS — THIS MONTH',
+    all: 'WEEKLY FOCUS — ALL TIME'
+  };
+  document.getElementById('chartTitle').textContent = titles[period];
+
+  // For month view, show every 5th label
+  const showEvery = period === 'month' ? 5 : 1;
+
+  days.forEach((d, i) => {
+    const col = document.createElement('div');
+    col.className = 'bar-col';
+
+    const pct = d.seconds / maxSec;
+    const bar = document.createElement('div');
+    bar.className = 'bar';
+    if (d.seconds > 0) bar.classList.add('has-data');
+    if (d.date.toDateString() === todayStr) bar.classList.add('today');
+
+    // Label
+    let lbl = '';
+    if (period === 'week') {
+      lbl = d.date.toLocaleDateString('en-US', { weekday: 'narrow' });
+    } else if (period === 'month') {
+      lbl = (i % showEvery === 0) ? d.date.getDate().toString() : '';
+    } else {
+      lbl = d.date.toLocaleDateString('en-US', { month: 'narrow', day: 'numeric' });
+    }
+
+    const lblEl = document.createElement('div');
+    lblEl.className = 'bar-lbl';
+    lblEl.textContent = lbl;
+
+    if (d.seconds > 0) {
+      const val = document.createElement('div');
+      val.className = 'bar-val';
+      const mins = Math.round(d.seconds / 60);
+      val.textContent = `${mins}m`;
+      bar.appendChild(val);
+    }
+
+    col.appendChild(bar);
+    col.appendChild(lblEl);
+    chart.appendChild(col);
+
+    // Animate in
+    requestAnimationFrame(() => {
+      bar.style.height = (pct * 100) + '%';
+    });
+  });
+}
+
+function renderSessions(filtered) {
+  const list = document.getElementById('sessionsList');
+  if (!filtered.length) {
+    list.innerHTML = '<div class="empty-state">no sessions yet<br><span style="opacity:0.5">start your first focus session</span></div>';
+    return;
+  }
+
+  list.innerHTML = filtered.slice(0, 20).map(s => {
+    const d = new Date(s.date);
+    const dateStr = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    const timeStr = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    const h = Math.floor(s.duration / 3600);
+    const m = Math.floor((s.duration % 3600) / 60);
+    const durStr = h > 0 ? `${h}h ${m}m` : `${m}m`;
+    return `
+      <div class="session-item">
+        <div>
+          <div class="session-date">${dateStr}</div>
+          <div class="session-time">${timeStr}</div>
+        </div>
+        <div class="session-dur">${durStr}</div>
+      </div>`;
+  }).join('');
+}
+
+// ── WAKE LOCK ──
+let wakeLock = null;
+let dimTimeout = null;
+
+async function acquireWakeLock() {
+  if ('wakeLock' in navigator) {
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+    } catch (e) {}
+  }
+  // Dim after 8 seconds of inactivity
+  scheduleDim();
+}
+
+function releaseWakeLock() {
+  if (wakeLock) { wakeLock.release(); wakeLock = null; }
+  undim();
+  clearTimeout(dimTimeout);
+}
+
+function scheduleDim() {
+  clearTimeout(dimTimeout);
+  dimTimeout = setTimeout(() => {
+    document.body.classList.add('dimmed');
+  }, 8000);
+}
+
+function undim() {
+  document.body.classList.remove('dimmed');
+}
+
+// Tap anywhere to undim and reset the dim timer
+document.addEventListener('click', () => {
+  if (document.body.classList.contains('dimmed')) {
+    undim();
+    if (timerState === 'running') scheduleDim();
+  } else if (timerState === 'running') {
+    scheduleDim();
+  }
+});
+
+// Re-acquire if user switches tabs and comes back
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && timerState === 'running') {
+    acquireWakeLock();
+  }
+});
+
+// ── SERVICE WORKER ──
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js');
+}
+
+// ── START ──
+init();
+loadSessions();
+</script>
+</body>
+</html>
