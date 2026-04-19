@@ -670,6 +670,107 @@
     /* Bottom padding for Safari home indicator */
     .view { padding-bottom: env(safe-area-inset-bottom); }
 
+    /* Install overlay */
+    #install-sheet {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      align-items: flex-end;
+      justify-content: center;
+    }
+    #install-sheet.visible { display: flex; }
+
+    .install-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+    }
+
+    .install-card {
+      position: relative;
+      width: 100%;
+      max-width: 480px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      border-radius: 20px 20px 0 0;
+      padding: 24px 24px calc(24px + env(safe-area-inset-bottom));
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .install-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+
+    .install-title {
+      font-family: 'Fraunces', serif;
+      font-size: 22px;
+      font-weight: 200;
+      color: var(--text);
+    }
+
+    .install-sub {
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.5px;
+      margin-top: 2px;
+    }
+
+    .install-dismiss {
+      background: var(--surface2);
+      border: none;
+      color: var(--muted);
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      font-size: 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .install-steps {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .install-step {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .install-step-num {
+      width: 26px; height: 26px;
+      border-radius: 50%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--accent);
+      font-size: 11px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .install-step-text {
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.4;
+    }
+
+    .install-step-text span {
+      color: var(--muted);
+      font-size: 11px;
+      display: block;
+    }
+
     /* Sign-in screen */
     #signin-screen {
       display: none;
@@ -744,6 +845,46 @@
 <div class="flash-overlay" id="flashOverlay"></div>
 <div class="toast" id="toast"></div>
 <div class="dim-tap-hint">TAP TO BRIGHTEN</div>
+
+<!-- INSTALL SHEET -->
+<div id="install-sheet">
+  <div class="install-backdrop" onclick="dismissInstall()"></div>
+  <div class="install-card">
+    <div class="install-header">
+      <div>
+        <div class="install-title">Add to Home Screen</div>
+        <div class="install-sub">FOR THE BEST EXPERIENCE</div>
+      </div>
+      <button class="install-dismiss" onclick="dismissInstall()">×</button>
+    </div>
+    <div id="install-steps-ios" class="install-steps" style="display:none">
+      <div class="install-step">
+        <div class="install-step-num">1</div>
+        <div class="install-step-text">
+          Tap the Share button
+          <span>The box with an arrow at the bottom of Safari</span>
+        </div>
+      </div>
+      <div class="install-step">
+        <div class="install-step-num">2</div>
+        <div class="install-step-text">
+          Tap "Add to Home Screen"
+          <span>Scroll down in the share sheet to find it</span>
+        </div>
+      </div>
+      <div class="install-step">
+        <div class="install-step-num">3</div>
+        <div class="install-step-text">
+          Tap "Add"
+          <span>Focus will appear on your home screen</span>
+        </div>
+      </div>
+    </div>
+    <div id="install-steps-android" class="install-steps" style="display:none">
+      <button class="btn-primary" id="installBtn" onclick="triggerInstall()">ADD TO HOME SCREEN</button>
+    </div>
+  </div>
+</div>
 
 <!-- SIGN-IN SCREEN -->
 <div id="signin-screen">
@@ -1394,6 +1535,44 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js');
 }
 
+// ── INSTALL PROMPT ──
+let deferredInstallPrompt = null;
+
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+});
+
+function checkInstall() {
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+  const isPWA = navigator.standalone === true
+    || matchMedia('(display-mode: standalone)').matches;
+
+  if (isPWA || sessionStorage.getItem('install-dismissed')) return;
+
+  const sheet = document.getElementById('install-sheet');
+  if (isIOS) {
+    document.getElementById('install-steps-ios').style.display = 'flex';
+  } else if (deferredInstallPrompt) {
+    document.getElementById('install-steps-android').style.display = 'flex';
+  } else {
+    return; // Chrome desktop after already installed, etc — don't show
+  }
+  sheet.classList.add('visible');
+}
+
+function dismissInstall() {
+  document.getElementById('install-sheet').classList.remove('visible');
+  sessionStorage.setItem('install-dismissed', '1');
+}
+
+async function triggerInstall() {
+  if (!deferredInstallPrompt) return;
+  deferredInstallPrompt.prompt();
+  const { outcome } = await deferredInstallPrompt.userChoice;
+  if (outcome === 'accepted') dismissInstall();
+}
+
 // ── START ──
 async function boot() {
   const res = await fetch('/api/me');
@@ -1408,6 +1587,7 @@ async function boot() {
   document.getElementById('userPill').style.display = 'flex';
   init();
   loadSessions();
+  checkInstall();
 }
 
 boot();
