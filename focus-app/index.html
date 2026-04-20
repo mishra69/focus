@@ -1114,6 +1114,22 @@ function handleMainBtn() {
   if (timerState === 'idle') startTimer();
 }
 
+const MAX_SESSION_SECS = 2 * 60 * 60; // 2 hours cap for recovered sessions
+
+async function setActive() {
+  try {
+    await fetch('/api/active', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ startTime: new Date().toISOString(), mode: timerMode })
+    });
+  } catch (e) {}
+}
+
+async function clearActive() {
+  try { await fetch('/api/active', { method: 'DELETE' }); } catch (e) {}
+}
+
 function startTimer() {
   timerState = 'running';
   if (timerMode === 'countup') elapsedSeconds = 0;
@@ -1129,6 +1145,7 @@ function startTimer() {
 
   intervalId = setInterval(tick, 1000);
   acquireWakeLock();
+  setActive();
 }
 
 function tick() {
@@ -1225,6 +1242,7 @@ function completeSession() {
 function resetTimer() {
   clearInterval(intervalId);
   releaseWakeLock();
+  clearActive();
   timerState = 'idle';
   remainingSeconds = totalSeconds;
   elapsedSeconds = 0;
@@ -1573,6 +1591,34 @@ async function triggerInstall() {
   if (outcome === 'accepted') dismissInstall();
 }
 
+async function checkActiveSession() {
+  try {
+    const res = await fetch('/api/active');
+    const active = await res.json();
+    if (!active) return;
+
+    const elapsed = Math.floor((Date.now() - new Date(active.startTime)) / 1000);
+
+    if (active.mode === 'countdown') {
+      // Countdown interrupted = no credit, just clean up silently
+      clearActive();
+      return;
+    }
+
+    // Count up: cap at 2h, save and notify
+    const duration = Math.min(elapsed, MAX_SESSION_SECS);
+    await saveSession(duration);
+    await clearActive();
+
+    const h = Math.floor(duration / 3600);
+    const m = Math.floor((duration % 3600) / 60);
+    const label = h > 0 ? `${h}h ${m}m` : `${m}m`;
+    const capped = elapsed > MAX_SESSION_SECS ? ' (capped at 2h)' : '';
+    showToast(`saved ${label} from earlier session${capped}`, 'success');
+    updateTodayStats();
+  } catch (e) {}
+}
+
 // ── START ──
 async function boot() {
   const res = await fetch('/api/me');
@@ -1588,6 +1634,7 @@ async function boot() {
   init();
   loadSessions();
   checkInstall();
+  checkActiveSession();
 }
 
 boot();

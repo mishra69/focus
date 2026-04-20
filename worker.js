@@ -10,6 +10,7 @@ export default {
     if (url.pathname === '/auth/logout') return handleLogout();
     if (url.pathname === '/api/me') return handleMe(request, env);
     if (url.pathname === '/api/sessions') return handleSessions(request, env);
+    if (url.pathname === '/api/active') return handleActive(request, env);
 
     return env.ASSETS.fetch(request);
   }
@@ -115,6 +116,31 @@ async function handleSessions(request, env) {
     const sessions = data ? JSON.parse(data) : [];
     sessions.unshift(newSession);
     await env.SESSIONS.put(key, JSON.stringify(sessions));
+    return Response.json({ ok: true });
+  }
+
+  return new Response('Method not allowed', { status: 405 });
+}
+
+async function handleActive(request, env) {
+  const session = await getSession(request, env);
+  if (!session) return new Response('Unauthorized', { status: 401 });
+
+  const key = `active:${session.userId}`;
+
+  if (request.method === 'GET') {
+    const data = await env.SESSIONS.get(key);
+    return Response.json(data ? JSON.parse(data) : null);
+  }
+
+  if (request.method === 'POST') {
+    const body = await request.json();
+    await env.SESSIONS.put(key, JSON.stringify(body));
+    return Response.json({ ok: true });
+  }
+
+  if (request.method === 'DELETE') {
+    await env.SESSIONS.delete(key);
     return Response.json({ ok: true });
   }
 
