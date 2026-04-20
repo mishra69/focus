@@ -978,6 +978,7 @@
   <div class="report-header">
     <div class="report-title">Stats</div>
     <div class="period-toggle">
+      <button class="period-btn" onclick="setPeriod('day')">DAY</button>
       <button class="period-btn active" onclick="setPeriod('week')">WEEK</button>
       <button class="period-btn" onclick="setPeriod('month')">MONTH</button>
       <button class="period-btn" onclick="setPeriod('all')">ALL</button>
@@ -1318,7 +1319,9 @@ function renderReport() {
 function getFilteredData(period) {
   const now = new Date();
   let start;
-  if (period === 'week') {
+  if (period === 'day') {
+    start = new Date(now); start.setHours(0,0,0,0);
+  } else if (period === 'week') {
     start = new Date(now); start.setDate(now.getDate() - 6); start.setHours(0,0,0,0);
   } else if (period === 'month') {
     start = new Date(now); start.setDate(now.getDate() - 29); start.setHours(0,0,0,0);
@@ -1330,7 +1333,13 @@ function getFilteredData(period) {
 
   // Build days map
   const days = [];
-  if (period === 'week') {
+  if (period === 'day') {
+    // Hourly buckets for today
+    for (let i = 0; i < 24; i++) {
+      const d = new Date(now); d.setHours(i, 0, 0, 0);
+      days.push({ date: d, seconds: 0 });
+    }
+  } else if (period === 'week') {
     for (let i = 6; i >= 0; i--) {
       const d = new Date(now); d.setDate(now.getDate() - i); d.setHours(0,0,0,0);
       days.push({ date: d, seconds: 0 });
@@ -1352,8 +1361,14 @@ function getFilteredData(period) {
     Object.values(map).sort((a,b) => a.date - b.date).forEach(w => days.push(w));
   }
 
-  // Fill days
-  if (period !== 'all') {
+  // Fill buckets
+  if (period === 'day') {
+    filtered.forEach(s => {
+      const d = new Date(s.date);
+      const bucket = days.find(x => x.date.getHours() === d.getHours());
+      if (bucket) bucket.seconds += s.duration;
+    });
+  } else if (period !== 'all') {
     filtered.forEach(s => {
       const d = new Date(s.date); d.setHours(0,0,0,0);
       const day = days.find(x => x.date.getTime() === d.getTime());
@@ -1380,7 +1395,7 @@ function renderStats(filtered, period) {
   document.getElementById('statTotal').textContent = h > 0 ? `${h}h ${m}m` : `${m}m`;
   document.getElementById('statSessions').textContent = filtered.length;
 
-  const labels = { week: 'this week', month: 'this month', all: 'all time' };
+  const labels = { day: 'today', week: 'this week', month: 'this month', all: 'all time' };
   document.getElementById('statTotalSub').textContent = labels[period];
   document.getElementById('statSessionsSub').textContent = labels[period];
 
@@ -1423,14 +1438,15 @@ function renderBarChart(days, period) {
   const now = new Date();
 
   const titles = {
+    day: 'HOURLY FOCUS — TODAY',
     week: 'DAILY FOCUS — THIS WEEK',
     month: 'DAILY FOCUS — THIS MONTH',
     all: 'WEEKLY FOCUS — ALL TIME'
   };
   document.getElementById('chartTitle').textContent = titles[period];
 
-  // For month view, show every 5th label
-  const showEvery = period === 'month' ? 5 : 1;
+  // For month show every 5th label, for day show every 3rd hour
+  const showEvery = period === 'month' ? 5 : period === 'day' ? 3 : 1;
 
   days.forEach((d, i) => {
     const col = document.createElement('div');
@@ -1440,11 +1456,16 @@ function renderBarChart(days, period) {
     const bar = document.createElement('div');
     bar.className = 'bar';
     if (d.seconds > 0) bar.classList.add('has-data');
-    if (d.date.toDateString() === todayStr) bar.classList.add('today');
+    const isToday = period === 'day'
+      ? d.date.getHours() === now.getHours()
+      : d.date.toDateString() === todayStr;
+    if (isToday) bar.classList.add('today');
 
     // Label
     let lbl = '';
-    if (period === 'week') {
+    if (period === 'day') {
+      lbl = (i % showEvery === 0) ? `${d.date.getHours()}h` : '';
+    } else if (period === 'week') {
       lbl = d.date.toLocaleDateString('en-US', { weekday: 'narrow' });
     } else if (period === 'month') {
       lbl = (i % showEvery === 0) ? d.date.getDate().toString() : '';
