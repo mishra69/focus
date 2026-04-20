@@ -66,6 +66,8 @@ Focus sessions are stored in Cloudflare KV under `sessions:{googleUserId}` as a 
 
 Every session save costs 2 KV reads (auth token lookup + existing sessions) + 1 KV write.
 
+Active sessions are tracked in KV under `active:{userId}` — written when a session starts, deleted when it ends. If the app is evicted mid-session, the next open recovers the elapsed time automatically. Count-up sessions are saved (capped at 2 hours). Countdown sessions are discarded — consistent with the full-completion rule. Zero periodic writes: one write on start, one delete on end.
+
 ### Timer logic
 
 Both modes use a `setInterval` tick at 1-second intervals. Countdown decrements `remainingSeconds`; count up increments `elapsedSeconds`. The ring progress is calculated as a fraction of `CIRCUMFERENCE` (2π × 110px radius) and applied as `stroke-dashoffset` on an SVG circle.
