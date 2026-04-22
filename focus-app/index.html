@@ -649,6 +649,14 @@
       background: #000;
     }
 
+    body.dimmed * {
+      animation-play-state: paused !important;
+    }
+
+    body.dimmed .ring-progress {
+      transition: none;
+    }
+
     .dim-tap-hint {
       position: fixed;
       bottom: 60px;
