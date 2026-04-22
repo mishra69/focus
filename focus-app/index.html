@@ -1050,6 +1050,8 @@ let remainingSeconds = totalSeconds;
 let elapsedSeconds = 0;
 let timerState = 'idle'; // idle | running | paused
 let intervalId = null;
+let timerStartedAt = null;   // wall-clock start time
+let pausedElapsed = 0;       // seconds accumulated before a pause
 
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
@@ -1133,7 +1135,9 @@ async function clearActive() {
 
 function startTimer() {
   timerState = 'running';
-  if (timerMode === 'countup') elapsedSeconds = 0;
+  timerStartedAt = Date.now();
+  pausedElapsed = 0;
+  elapsedSeconds = 0;
 
   document.getElementById('mainBtn').innerHTML = '<span class="live-dot"></span>FOCUSING';
   document.getElementById('mainBtn').classList.add('running');
@@ -1150,11 +1154,12 @@ function startTimer() {
 }
 
 function tick() {
+  const elapsed = pausedElapsed + Math.floor((Date.now() - timerStartedAt) / 1000);
   if (timerMode === 'countdown') {
-    remainingSeconds--;
+    remainingSeconds = Math.max(0, totalSeconds - elapsed);
     if (remainingSeconds <= 0) { completeSession(); return; }
   } else {
-    elapsedSeconds++;
+    elapsedSeconds = elapsed;
   }
   const secs = timerMode === 'countdown' ? remainingSeconds : elapsedSeconds;
   if (!document.body.classList.contains('dimmed') || secs % 10 === 0) {
@@ -1201,6 +1206,7 @@ function updateDisplay() {
 
 function handlePause() {
   if (timerState === 'running') {
+    pausedElapsed += Math.floor((Date.now() - timerStartedAt) / 1000);
     timerState = 'paused';
     clearInterval(intervalId);
     releaseWakeLock();
@@ -1208,6 +1214,7 @@ function handlePause() {
     document.getElementById('timerLabel').textContent = 'PAUSED';
     document.getElementById('mainBtn').innerHTML = '<span style="opacity:0.5">⏸</span> PAUSED';
   } else if (timerState === 'paused') {
+    timerStartedAt = Date.now();
     timerState = 'running';
     intervalId = setInterval(tick, 1000);
     acquireWakeLock();
@@ -1245,6 +1252,8 @@ function resetTimer() {
   releaseWakeLock();
   clearActive();
   timerState = 'idle';
+  timerStartedAt = null;
+  pausedElapsed = 0;
   remainingSeconds = totalSeconds;
   elapsedSeconds = 0;
   document.getElementById('mainBtn').textContent = 'START FOCUS';
@@ -1566,6 +1575,7 @@ document.addEventListener('click', () => {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && timerState === 'running') {
     acquireWakeLock();
+    tick(); // recalculate immediately from wall clock — don't wait for next interval
   }
 });
 
