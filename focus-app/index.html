@@ -374,6 +374,8 @@
     #report-view {
       padding: 20px;
       gap: 16px;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
     }
 
     .report-header {
@@ -1051,7 +1053,7 @@ async function saveSession(durationSeconds) {
     });
   } catch (e) {}
 }
-let timerMode = 'countdown'; // 'countdown' | 'countup'
+let timerMode = localStorage.getItem('focus_timer_mode') || 'countdown';
 let selectedDuration = 30;   // minutes (countdown only)
 let totalSeconds = 30 * 60;
 let remainingSeconds = totalSeconds;
@@ -1071,6 +1073,15 @@ function init() {
   updateTodayDate();
   updateTodayStats();
   onSlider(3); // default 30 min
+  // Restore last used mode
+  if (timerMode === 'countup') {
+    document.querySelectorAll('.mode-btn').forEach(b =>
+      b.classList.toggle('active', b.textContent === 'COUNT UP')
+    );
+    document.getElementById('sliderWrap').style.opacity = '0.3';
+    document.getElementById('sliderWrap').style.pointerEvents = 'none';
+    document.getElementById('ringProgress').style.strokeDashoffset = CIRCUMFERENCE;
+  }
 }
 
 function updateTodayDate() {
@@ -1083,6 +1094,7 @@ function updateTodayDate() {
 function setMode(mode) {
   if (timerState !== 'idle') return;
   timerMode = mode;
+  localStorage.setItem('focus_timer_mode', mode);
   document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
   event.target.classList.add('active');
 
