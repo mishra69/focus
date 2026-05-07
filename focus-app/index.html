@@ -416,6 +416,35 @@
       color: var(--text);
     }
 
+    /* Period nav */
+    #period-nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 8px 16px;
+    }
+
+    #period-nav-label {
+      font-size: 13px;
+      color: var(--text);
+      letter-spacing: 0.5px;
+    }
+
+    .period-nav-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 24px;
+      cursor: pointer;
+      padding: 0 8px;
+      line-height: 1;
+    }
+
+    .period-nav-btn:disabled { opacity: 0.2; cursor: default; }
+
     /* Stat cards */
     .stat-cards {
       display: grid;
@@ -991,8 +1020,15 @@
       <button class="period-btn" onclick="setPeriod('day')">DAY</button>
       <button class="period-btn active" onclick="setPeriod('week')">WEEK</button>
       <button class="period-btn" onclick="setPeriod('month')">MONTH</button>
+      <button class="period-btn" onclick="setPeriod('year')">YEAR</button>
       <button class="period-btn" onclick="setPeriod('all')">ALL</button>
     </div>
+  </div>
+
+  <div id="period-nav" style="display:none">
+    <button class="period-nav-btn" onclick="navPeriod(-1)">&#8249;</button>
+    <span id="period-nav-label"></span>
+    <button class="period-nav-btn" onclick="navPeriod(1)" id="period-nav-next">&#8250;</button>
   </div>
 
   <div class="stat-cards">
@@ -1330,11 +1366,25 @@ function showView(name) {
 
 // ── REPORT ──
 let currentPeriod = 'week';
+let navMonth = new Date(); // month being viewed
+let navYear = new Date().getFullYear(); // year being viewed
 
 function setPeriod(p) {
   currentPeriod = p;
+  // Reset nav to current when switching period
+  navMonth = new Date();
+  navYear = new Date().getFullYear();
   document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
   event.target.classList.add('active');
+  renderReport();
+}
+
+function navPeriod(dir) {
+  if (currentPeriod === 'month') {
+    navMonth = new Date(navMonth.getFullYear(), navMonth.getMonth() + dir, 1);
+  } else if (currentPeriod === 'year') {
+    navYear += dir;
+  }
   renderReport();
 }
 
@@ -1343,27 +1393,56 @@ function renderReport() {
   renderStats(filtered, currentPeriod);
   renderBarChart(days, currentPeriod);
   renderSessions(filtered);
+  updatePeriodNav();
+}
+
+function updatePeriodNav() {
+  const nav = document.getElementById('period-nav');
+  const label = document.getElementById('period-nav-label');
+  const nextBtn = document.getElementById('period-nav-next');
+  const now = new Date();
+
+  if (currentPeriod === 'month') {
+    nav.style.display = 'flex';
+    label.textContent = navMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }).toUpperCase();
+    nextBtn.disabled = navMonth.getFullYear() === now.getFullYear() && navMonth.getMonth() === now.getMonth();
+  } else if (currentPeriod === 'year') {
+    nav.style.display = 'flex';
+    label.textContent = navYear.toString();
+    nextBtn.disabled = navYear >= now.getFullYear();
+  } else {
+    nav.style.display = 'none';
+  }
 }
 
 function getFilteredData(period) {
   const now = new Date();
-  let start;
+  let start, end;
+
   if (period === 'day') {
     start = new Date(now); start.setHours(0,0,0,0);
+    end = new Date(now); end.setHours(23,59,59,999);
   } else if (period === 'week') {
     start = new Date(now); start.setDate(now.getDate() - 6); start.setHours(0,0,0,0);
+    end = new Date(now);
   } else if (period === 'month') {
-    start = new Date(now); start.setDate(now.getDate() - 29); start.setHours(0,0,0,0);
+    start = new Date(navMonth.getFullYear(), navMonth.getMonth(), 1);
+    end = new Date(navMonth.getFullYear(), navMonth.getMonth() + 1, 0, 23, 59, 59);
+  } else if (period === 'year') {
+    start = new Date(navYear, 0, 1);
+    end = new Date(navYear, 11, 31, 23, 59, 59);
   } else {
-    start = new Date(0);
+    start = new Date(0); end = new Date();
   }
 
-  const filtered = sessions.filter(s => new Date(s.date) >= start);
+  const filtered = sessions.filter(s => {
+    const d = new Date(s.date);
+    return d >= start && d <= end;
+  });
 
-  // Build days map
+  // Build buckets
   const days = [];
   if (period === 'day') {
-    // Hourly buckets for today
     for (let i = 0; i < 24; i++) {
       const d = new Date(now); d.setHours(i, 0, 0, 0);
       days.push({ date: d, seconds: 0 });
@@ -1374,12 +1453,16 @@ function getFilteredData(period) {
       days.push({ date: d, seconds: 0 });
     }
   } else if (period === 'month') {
-    for (let i = 29; i >= 0; i--) {
-      const d = new Date(now); d.setDate(now.getDate() - i); d.setHours(0,0,0,0);
-      days.push({ date: d, seconds: 0 });
+    const daysInMonth = new Date(navMonth.getFullYear(), navMonth.getMonth() + 1, 0).getDate();
+    for (let i = 1; i <= daysInMonth; i++) {
+      days.push({ date: new Date(navMonth.getFullYear(), navMonth.getMonth(), i), seconds: 0 });
+    }
+  } else if (period === 'year') {
+    for (let i = 0; i < 12; i++) {
+      days.push({ date: new Date(navYear, i, 1), seconds: 0 });
     }
   } else {
-    // Group by week for all-time
+    // All-time: group by week
     const map = {};
     sessions.forEach(s => {
       const d = new Date(s.date);
@@ -1395,6 +1478,12 @@ function getFilteredData(period) {
     filtered.forEach(s => {
       const d = new Date(s.date);
       const bucket = days.find(x => x.date.getHours() === d.getHours());
+      if (bucket) bucket.seconds += s.duration;
+    });
+  } else if (period === 'year') {
+    filtered.forEach(s => {
+      const d = new Date(s.date);
+      const bucket = days.find(x => x.date.getMonth() === d.getMonth());
       if (bucket) bucket.seconds += s.duration;
     });
   } else if (period !== 'all') {
@@ -1424,7 +1513,11 @@ function renderStats(filtered, period) {
   document.getElementById('statTotal').textContent = h > 0 ? `${h}h ${m}m` : `${m}m`;
   document.getElementById('statSessions').textContent = filtered.length;
 
-  const labels = { day: 'today', week: 'this week', month: 'this month', all: 'all time' };
+  const labels = {
+    day: 'today', week: 'this week',
+    month: navMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }).toLowerCase(),
+    year: navYear.toString(), all: 'all time'
+  };
   document.getElementById('statTotalSub').textContent = labels[period];
   document.getElementById('statSessionsSub').textContent = labels[period];
 
@@ -1466,15 +1559,17 @@ function renderBarChart(days, period) {
   const todayStr = new Date().toDateString();
   const now = new Date();
 
+  const monthName = navMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }).toUpperCase();
   const titles = {
     day: 'HOURLY FOCUS — TODAY',
     week: 'DAILY FOCUS — THIS WEEK',
-    month: 'DAILY FOCUS — THIS MONTH',
+    month: `DAILY FOCUS — ${monthName}`,
+    year: `MONTHLY FOCUS — ${navYear}`,
     all: 'WEEKLY FOCUS — ALL TIME'
   };
   document.getElementById('chartTitle').textContent = titles[period];
 
-  // For month show every 5th label, for day show every 3rd hour
+  // Label density by period
   const showEvery = period === 'month' ? 5 : period === 'day' ? 3 : 1;
 
   days.forEach((d, i) => {
@@ -1487,7 +1582,9 @@ function renderBarChart(days, period) {
     if (d.seconds > 0) bar.classList.add('has-data');
     const isToday = period === 'day'
       ? d.date.getHours() === now.getHours()
-      : d.date.toDateString() === todayStr;
+      : period === 'year'
+        ? d.date.getMonth() === now.getMonth() && d.date.getFullYear() === now.getFullYear()
+        : d.date.toDateString() === todayStr;
     if (isToday) bar.classList.add('today');
 
     // Label
@@ -1498,6 +1595,8 @@ function renderBarChart(days, period) {
       lbl = d.date.toLocaleDateString('en-US', { weekday: 'narrow' });
     } else if (period === 'month') {
       lbl = (i % showEvery === 0) ? d.date.getDate().toString() : '';
+    } else if (period === 'year') {
+      lbl = d.date.toLocaleDateString('en-US', { month: 'narrow' });
     } else {
       lbl = d.date.toLocaleDateString('en-US', { month: 'narrow', day: 'numeric' });
     }
