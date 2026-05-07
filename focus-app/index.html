@@ -58,6 +58,17 @@
       font-weight: 200;
       letter-spacing: -0.5px;
       color: var(--accent);
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+
+    .nav-version {
+      font-family: 'DM Mono', monospace;
+      font-size: 9px;
+      color: var(--muted);
+      letter-spacing: 0.5px;
+      opacity: 0.5;
     }
 
     .nav-tabs {
@@ -906,7 +917,7 @@
 </div>
 
 <nav>
-  <span class="nav-logo">focus.</span>
+  <span class="nav-logo">focus.<span class="nav-version" id="appVersion"></span></span>
   <div style="display:flex;align-items:center;gap:8px;">
     <div class="nav-tabs">
       <button class="nav-tab active" onclick="showView('timer')">TIMER</button>
@@ -1060,6 +1071,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
+const VERSION = '20260507_v1';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -1067,6 +1079,7 @@ function sliderToMin(val) { return val * 10; }
 
 // ── INIT ──
 function init() {
+  document.getElementById('appVersion').textContent = VERSION;
   updateTodayDate();
   updateTodayStats();
   onSlider(3); // default 30 min
