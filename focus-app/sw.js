@@ -1,4 +1,4 @@
-const CACHE = 'focus-v3';
+const CACHE = 'focus-v4';
 const ASSETS = ['/', '/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -20,12 +20,14 @@ self.addEventListener('fetch', e => {
   if (url.pathname.startsWith('/auth/') || url.pathname.startsWith('/api/')) return;
 
   e.respondWith(
-    fetch(e.request)
-      .then(response => {
-        const clone = response.clone();
-        caches.open(CACHE).then(c => c.put(e.request, clone));
-        return response;
+    caches.open(CACHE).then(cache =>
+      cache.match(e.request).then(cached => {
+        const fresh = fetch(e.request).then(response => {
+          cache.put(e.request, response.clone());
+          return response;
+        });
+        return cached || fresh;
       })
-      .catch(() => caches.match(e.request))
+    )
   );
 });
