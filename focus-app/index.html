@@ -522,9 +522,16 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 6px;
+      gap: 4px;
       height: 100%;
-      justify-content: flex-end;
+      min-width: 0;
+    }
+
+    .bar-area {
+      flex: 1;
+      width: 100%;
+      display: flex;
+      align-items: flex-end;
     }
 
     .bar {
@@ -982,7 +989,6 @@
     <button class="btn-primary" id="mainBtn" onclick="handleMainBtn()">START FOCUS</button>
 
     <div class="btn-row" id="secondaryBtns" style="display:none;">
-      <button class="btn-secondary" style="flex:1" onclick="handlePause()" id="pauseBtn">PAUSE</button>
       <button class="btn-secondary" style="flex:1" onclick="handleStop()">STOP</button>
     </div>
   </div>
@@ -1178,7 +1184,9 @@ function startTimer() {
   document.getElementById('modeToggle').style.pointerEvents = 'none';
   document.getElementById('timerLabel').textContent = 'FOCUSING';
 
-  intervalId = setInterval(tick, 1000);
+  intervalId = setInterval(tick, timerMode === 'countup' ? 60000 : 1000);
+  initAudio();
+  playSound('start');
   acquireWakeLock();
   setActive();
 }
@@ -1188,27 +1196,24 @@ function tick() {
   if (timerMode === 'countdown') {
     remainingSeconds = Math.max(0, totalSeconds - elapsed);
     if (remainingSeconds <= 0) { completeSession(); return; }
+    if (!document.body.classList.contains('dimmed') || remainingSeconds % 10 === 0) {
+      updateDisplay();
+    }
   } else {
     elapsedSeconds = elapsed;
-  }
-  const secs = timerMode === 'countdown' ? remainingSeconds : elapsedSeconds;
-  if (!document.body.classList.contains('dimmed') || secs % 10 === 0) {
     updateDisplay();
   }
 }
 
 function updateDisplay() {
-  let displaySecs, progress;
-
-  if (timerMode === 'countdown') {
-    displaySecs = remainingSeconds;
-    progress = totalSeconds > 0 ? 1 - (remainingSeconds / totalSeconds) : 0;
-  } else {
-    displaySecs = elapsedSeconds;
-    // Ring fills every 30 min in countup mode (loops)
-    const cycle = 30 * 60;
-    progress = (elapsedSeconds % cycle) / cycle;
+  if (timerMode === 'countup') {
+    document.getElementById('timerDisplay').textContent = `${Math.floor(elapsedSeconds / 60)}m`;
+    document.getElementById('ringProgress').style.strokeDashoffset = CIRCUMFERENCE;
+    return;
   }
+
+  const displaySecs = remainingSeconds;
+  const progress = totalSeconds > 0 ? 1 - (remainingSeconds / totalSeconds) : 0;
 
   const h = Math.floor(displaySecs / 3600);
   const m = Math.floor((displaySecs % 3600) / 60);
@@ -1234,35 +1239,20 @@ function updateDisplay() {
   }
 }
 
-function handlePause() {
-  if (timerState === 'running') {
-    pausedElapsed += Math.floor((Date.now() - timerStartedAt) / 1000);
-    timerState = 'paused';
-    clearInterval(intervalId);
-    releaseWakeLock();
-    document.getElementById('pauseBtn').textContent = 'RESUME';
-    document.getElementById('timerLabel').textContent = 'PAUSED';
-    document.getElementById('mainBtn').innerHTML = '<span style="opacity:0.5">⏸</span> PAUSED';
-  } else if (timerState === 'paused') {
-    timerStartedAt = Date.now();
-    timerState = 'running';
-    intervalId = setInterval(tick, 1000);
-    acquireWakeLock();
-    document.getElementById('pauseBtn').textContent = 'PAUSE';
-    document.getElementById('timerLabel').textContent = 'FOCUSING';
-    document.getElementById('mainBtn').innerHTML = '<span class="live-dot"></span>FOCUSING';
-  }
-}
 
 function handleStop() {
   if (timerState === 'idle') return;
   if (timerMode === 'countdown') {
+    playSound('discard');
     showToast("it's ok, we tried 🌱", 'discard');
   } else {
-    if (elapsedSeconds >= 10 * 60) {
-      saveSession(elapsedSeconds);
+    const actualElapsed = pausedElapsed + Math.floor((Date.now() - timerStartedAt) / 1000);
+    if (actualElapsed >= 10 * 60) {
+      saveSession(actualElapsed);
+      playSound('complete');
       showToast('session saved ✓', 'success');
     } else {
+      playSound('discard');
       showToast("it's ok, we tried 🌱", 'discard');
     }
   }
@@ -1272,6 +1262,7 @@ function handleStop() {
 function completeSession() {
   clearInterval(intervalId);
   saveSession(totalSeconds);
+  playSound('complete');
   flashScreen();
   showToast('session complete 🎉', 'success');
   resetTimer();
@@ -1294,7 +1285,6 @@ function resetTimer() {
   document.getElementById('modeToggle').style.opacity = '1';
   document.getElementById('modeToggle').style.pointerEvents = 'auto';
   document.getElementById('timerLabel').textContent = 'READY';
-  document.getElementById('pauseBtn').textContent = 'PAUSE';
   updateDisplay();
   updateTodayStats();
   if (document.getElementById('report-view').classList.contains('active')) renderReport();
@@ -1502,10 +1492,8 @@ function getWeekStart(date) { return getWeekStartOf(date); }
 
 function renderStats(filtered, period) {
   const totalSec = filtered.reduce((a,s) => a + s.duration, 0);
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
 
-  document.getElementById('statTotal').textContent = h > 0 ? `${h}h ${m}m` : `${m}m`;
+  document.getElementById('statTotal').textContent = `${Math.round(totalSec / 60)}m`;
   document.getElementById('statSessions').textContent = filtered.length;
 
   const labels = {
@@ -1521,9 +1509,7 @@ function renderStats(filtered, period) {
   // Active days
   const activeDays = new Set(filtered.map(s => new Date(s.date).toDateString())).size;
   const avgSec = activeDays ? totalSec / activeDays : 0;
-  const ah = Math.floor(avgSec / 3600);
-  const am = Math.floor((avgSec % 3600) / 60);
-  document.getElementById('statAvg').textContent = ah > 0 ? `${ah}h ${am}m` : `${am}m`;
+  document.getElementById('statAvg').textContent = `${Math.round(avgSec / 60)}m`;
 
   // Best day
   const dayMap = {};
@@ -1535,9 +1521,7 @@ function renderStats(filtered, period) {
   Object.entries(dayMap).forEach(([d, sec]) => {
     if (sec > bestSec) { bestSec = sec; bestDay = d; }
   });
-  const bh = Math.floor(bestSec / 3600);
-  const bm = Math.floor((bestSec % 3600) / 60);
-  document.getElementById('statBest').textContent = bestSec > 0 ? (bh > 0 ? `${bh}h ${bm}m` : `${bm}m`) : '0m';
+  document.getElementById('statBest').textContent = `${Math.round(bestSec / 60)}m`;
   document.getElementById('statBestDay').textContent = bestDay !== '—'
     ? new Date(bestDay).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
     : '—';
@@ -1613,7 +1597,10 @@ function renderBarChart(days, period) {
       bar.appendChild(val);
     }
 
-    col.appendChild(bar);
+    const barArea = document.createElement('div');
+    barArea.className = 'bar-area';
+    barArea.appendChild(bar);
+    col.appendChild(barArea);
     col.appendChild(lblEl);
     chart.appendChild(col);
 
@@ -1624,6 +1611,45 @@ function renderBarChart(days, period) {
   });
 }
 
+
+// ── AUDIO ──
+let audioCtx = null;
+
+function initAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  } else if (audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+}
+
+function tone(freq, startTime, duration, volume) {
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.type = 'sine';
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0, startTime);
+  gain.gain.linearRampToValueAtTime(volume, startTime + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+  osc.start(startTime);
+  osc.stop(startTime + duration);
+}
+
+function playSound(type) {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  if (type === 'start') {
+    tone(523, t, 0.35, 0.25);                          // C5
+  } else if (type === 'complete') {
+    tone(523, t,        0.30, 0.25);                   // C5
+    tone(659, t + 0.15, 0.30, 0.25);                   // E5
+    tone(784, t + 0.30, 0.45, 0.25);                   // G5
+  } else if (type === 'discard') {
+    tone(392, t, 0.4, 0.15);                           // G4, quiet
+  }
+}
 
 // ── WAKE LOCK ──
 let wakeLock = null;
