@@ -1684,9 +1684,22 @@ function scheduleSound(ctx, type) {
     osc.start(t + delay);
     osc.stop(t + delay + dur + 0.05);
   };
-  if (type === 'start')         { play(523, 0, 0.3); }
-  else if (type === 'complete') { play(523, 0, 0.25); play(659, 0.15, 0.25); play(784, 0.3, 0.4); }
-  else if (type === 'discard')  { play(392, 0, 0.35, 0.15); }
+  if (type === 'start') {
+    // 3 ascending — "let's go"
+    play(392, 0.00, 0.25);   // G4
+    play(523, 0.14, 0.25);   // C5
+    play(659, 0.28, 0.35);   // E5
+  } else if (type === 'complete') {
+    // 3 ascending, wider spread, last note sustains — "done!"
+    play(523, 0.00, 0.35);   // C5
+    play(659, 0.20, 0.35);   // E5
+    play(784, 0.40, 0.55);   // G5
+  } else if (type === 'discard') {
+    // 3 descending — "winding down"
+    play(523, 0.00, 0.25);   // C5
+    play(392, 0.14, 0.25);   // G4
+    play(294, 0.28, 0.40);   // D4
+  }
 }
 
 function playSound(type) {
