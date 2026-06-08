@@ -510,28 +510,50 @@
       margin-bottom: 16px;
     }
 
+    .chart-body {
+      display: flex;
+      gap: 8px;
+      height: 130px;
+    }
+
+    .y-axis {
+      width: 26px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding-bottom: 18px;
+    }
+
+    .y-label {
+      font-size: 9px;
+      color: var(--muted);
+      text-align: right;
+      line-height: 1;
+    }
+
+    .chart-right {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+
     .bar-chart {
+      flex: 1;
       display: flex;
       align-items: flex-end;
       gap: 6px;
-      height: 120px;
+      position: relative;
     }
 
     .bar-col {
       flex: 1;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 4px;
       height: 100%;
-      min-width: 0;
-    }
-
-    .bar-area {
-      flex: 1;
-      width: 100%;
       display: flex;
       align-items: flex-end;
+      min-width: 0;
     }
 
     .bar {
@@ -540,26 +562,33 @@
       background: var(--surface2);
       transition: height 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
       min-height: 2px;
-      position: relative;
     }
 
     .bar.has-data { background: var(--accent2); }
     .bar.today { background: var(--accent); }
 
+    .bar-labels-row {
+      display: flex;
+      gap: 6px;
+      height: 14px;
+    }
+
     .bar-lbl {
+      flex: 1;
       font-size: 9px;
       color: var(--muted);
       letter-spacing: 0.3px;
+      text-align: center;
+      overflow: hidden;
+      white-space: nowrap;
     }
 
-    .bar-val {
-      font-size: 9px;
-      color: var(--muted);
+    .grid-line {
       position: absolute;
-      top: -16px;
-      left: 50%;
-      transform: translateX(-50%);
-      white-space: nowrap;
+      left: 0;
+      right: 0;
+      border-top: 1px solid var(--border);
+      pointer-events: none;
     }
 
     /* Sessions list */
@@ -1038,7 +1067,13 @@
 
   <div class="chart-wrap">
     <div class="chart-title" id="chartTitle">DAILY FOCUS — THIS WEEK</div>
-    <div class="bar-chart" id="barChart"></div>
+    <div class="chart-body">
+      <div class="y-axis" id="yAxis"></div>
+      <div class="chart-right">
+        <div class="bar-chart" id="barChart"></div>
+        <div class="bar-labels-row" id="barLabels"></div>
+      </div>
+    </div>
   </div>
 
 </div>
@@ -1185,7 +1220,6 @@ function startTimer() {
   document.getElementById('timerLabel').textContent = 'FOCUSING';
 
   intervalId = setInterval(tick, timerMode === 'countup' ? 60000 : 1000);
-  initAudio();
   playSound('start');
   acquireWakeLock();
   setActive();
@@ -1527,9 +1561,22 @@ function renderStats(filtered, period) {
     : '—';
 }
 
+function niceCeil(mins) {
+  if (mins <= 30) return 30;
+  if (mins <= 60) return 60;
+  if (mins <= 90) return 90;
+  if (mins <= 120) return 120;
+  if (mins <= 180) return 180;
+  return Math.ceil(mins / 60) * 60;
+}
+
 function renderBarChart(days, period) {
   const chart = document.getElementById('barChart');
+  const labelsRow = document.getElementById('barLabels');
+  const yAxis = document.getElementById('yAxis');
   chart.innerHTML = '';
+  labelsRow.innerHTML = '';
+  yAxis.innerHTML = '';
 
   if (!days.length) {
     chart.innerHTML = '<div style="color:var(--muted);font-size:11px;margin:auto">no data yet</div>';
@@ -1537,9 +1584,12 @@ function renderBarChart(days, period) {
   }
 
   const maxSec = Math.max(...days.map(d => d.seconds), 1);
+  const maxMins = Math.round(maxSec / 60);
+  const niceMax = niceCeil(maxMins);
   const todayStr = new Date().toDateString();
   const now = new Date();
 
+  // Chart title
   const isNavToday = navDay.toDateString() === now.toDateString();
   const navWeekEnd = new Date(navWeekStart); navWeekEnd.setDate(navWeekStart.getDate() + 6);
   const fmtShort = d => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase();
@@ -1553,14 +1603,31 @@ function renderBarChart(days, period) {
   };
   document.getElementById('chartTitle').textContent = titles[period];
 
+  // Y-axis: top, mid, bottom labels
+  [niceMax, Math.round(niceMax / 2), 0].forEach(val => {
+    const lbl = document.createElement('div');
+    lbl.className = 'y-label';
+    lbl.textContent = val > 0 ? val + 'm' : '';
+    yAxis.appendChild(lbl);
+  });
+
+  // Gridlines at top (100%) and middle (50%)
+  [0, 50].forEach(pct => {
+    const line = document.createElement('div');
+    line.className = 'grid-line';
+    line.style.top = pct + '%';
+    chart.appendChild(line);
+  });
+
   // Label density by period
   const showEvery = period === 'month' ? 5 : period === 'day' ? 3 : 1;
 
   days.forEach((d, i) => {
+    // Bar column
     const col = document.createElement('div');
     col.className = 'bar-col';
 
-    const pct = d.seconds / maxSec;
+    const pct = d.seconds / (niceMax * 60);
     const bar = document.createElement('div');
     bar.className = 'bar';
     if (d.seconds > 0) bar.classList.add('has-data');
@@ -1571,7 +1638,10 @@ function renderBarChart(days, period) {
         : d.date.toDateString() === todayStr;
     if (isToday) bar.classList.add('today');
 
-    // Label
+    col.appendChild(bar);
+    chart.appendChild(col);
+
+    // Label in separate row
     let lbl = '';
     if (period === 'day') {
       lbl = (i % showEvery === 0) ? `${d.date.getHours()}h` : '';
@@ -1584,25 +1654,10 @@ function renderBarChart(days, period) {
     } else {
       lbl = d.date.toLocaleDateString('en-US', { month: 'narrow', day: 'numeric' });
     }
-
     const lblEl = document.createElement('div');
     lblEl.className = 'bar-lbl';
     lblEl.textContent = lbl;
-
-    if (d.seconds > 0) {
-      const val = document.createElement('div');
-      val.className = 'bar-val';
-      const mins = Math.round(d.seconds / 60);
-      val.textContent = `${mins}m`;
-      bar.appendChild(val);
-    }
-
-    const barArea = document.createElement('div');
-    barArea.className = 'bar-area';
-    barArea.appendChild(bar);
-    col.appendChild(barArea);
-    col.appendChild(lblEl);
-    chart.appendChild(col);
+    labelsRow.appendChild(lblEl);
 
     // Animate in
     requestAnimationFrame(() => {
@@ -1615,40 +1670,36 @@ function renderBarChart(days, period) {
 // ── AUDIO ──
 let audioCtx = null;
 
-function initAudio() {
-  if (!audioCtx) {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  } else if (audioCtx.state === 'suspended') {
-    audioCtx.resume();
-  }
-}
-
-function tone(freq, startTime, duration, volume) {
-  const osc = audioCtx.createOscillator();
-  const gain = audioCtx.createGain();
-  osc.connect(gain);
-  gain.connect(audioCtx.destination);
-  osc.type = 'sine';
-  osc.frequency.value = freq;
-  gain.gain.setValueAtTime(0, startTime);
-  gain.gain.linearRampToValueAtTime(volume, startTime + 0.02);
-  gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
-  osc.start(startTime);
-  osc.stop(startTime + duration);
+function scheduleSound(ctx, type) {
+  const t = ctx.currentTime + 0.05;
+  const play = (freq, delay, dur, vol = 0.25) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(vol, t + delay);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + delay + dur);
+    osc.start(t + delay);
+    osc.stop(t + delay + dur + 0.05);
+  };
+  if (type === 'start')         { play(523, 0, 0.3); }
+  else if (type === 'complete') { play(523, 0, 0.25); play(659, 0.15, 0.25); play(784, 0.3, 0.4); }
+  else if (type === 'discard')  { play(392, 0, 0.35, 0.15); }
 }
 
 function playSound(type) {
-  if (!audioCtx) return;
-  const t = audioCtx.currentTime;
-  if (type === 'start') {
-    tone(523, t, 0.35, 0.25);                          // C5
-  } else if (type === 'complete') {
-    tone(523, t,        0.30, 0.25);                   // C5
-    tone(659, t + 0.15, 0.30, 0.25);                   // E5
-    tone(784, t + 0.30, 0.45, 0.25);                   // G5
-  } else if (type === 'discard') {
-    tone(392, t, 0.4, 0.15);                           // G4, quiet
-  }
+  try {
+    if (!audioCtx || audioCtx.state === 'closed') {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().then(() => scheduleSound(audioCtx, type));
+    } else {
+      scheduleSound(audioCtx, type);
+    }
+  } catch(e) {}
 }
 
 // ── WAKE LOCK ──
