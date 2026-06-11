@@ -971,7 +971,7 @@
     <div class="today-pill" id="todayDate">today</div>
     <div class="today-stats">
       <div class="today-stat">
-        <span class="today-stat-val" id="todayHours">0h 0m</span>
+        <span class="today-stat-val" id="todayHours">0m</span>
         <span class="today-stat-lbl">FOCUSED</span>
       </div>
       <div class="today-divider"></div>
@@ -1171,15 +1171,7 @@ function onSlider(val) {
   selectedDuration = mins;
   totalSeconds = mins * 60;
   remainingSeconds = totalSeconds;
-  let label;
-  if (mins < 60) {
-    label = `${mins} min`;
-  } else {
-    const h = Math.floor(mins / 60);
-    const m = mins % 60;
-    label = m > 0 ? `${h}h ${m}m` : `${h}h`;
-  }
-  document.getElementById('sliderVal').textContent = label;
+  document.getElementById('sliderVal').textContent = `${mins} min`;
   if (timerState === 'idle') updateDisplay();
 }
 
@@ -1287,17 +1279,11 @@ function updateDisplay() {
   const displaySecs = remainingSeconds;
   const progress = totalSeconds > 0 ? 1 - (remainingSeconds / totalSeconds) : 0;
 
-  const h = Math.floor(displaySecs / 3600);
-  const m = Math.floor((displaySecs % 3600) / 60);
+  const m = Math.floor(displaySecs / 60);
   const s = displaySecs % 60;
 
-  if (h > 0) {
-    document.getElementById('timerDisplay').textContent =
-      `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-  } else {
-    document.getElementById('timerDisplay').textContent =
-      `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-  }
+  document.getElementById('timerDisplay').textContent =
+    `${m}:${String(s).padStart(2,'0')}`;
 
   const offset = CIRCUMFERENCE - (progress * CIRCUMFERENCE);
   document.getElementById('ringProgress').style.strokeDashoffset = offset;
@@ -1386,9 +1372,7 @@ function updateTodayStats() {
   const today = new Date().toDateString();
   const todaySessions = sessions.filter(s => new Date(s.date).toDateString() === today);
   const totalMins = todaySessions.reduce((a, s) => a + s.duration, 0) / 60;
-  const h = Math.floor(totalMins / 60);
-  const m = Math.floor(totalMins % 60);
-  document.getElementById('todayHours').textContent = `${h}h ${m}m`;
+  document.getElementById('todayHours').textContent = `${Math.round(totalMins)}m`;
   document.getElementById('todaySessions').textContent = todaySessions.length;
 }
 
@@ -1683,7 +1667,7 @@ function renderBarChart(days, period) {
     // Label in separate row
     let lbl = '';
     if (period === 'day') {
-      lbl = (i % showEvery === 0) ? `${d.date.getHours()}h` : '';
+      lbl = (i % showEvery === 0) ? `${d.date.getHours()}` : '';
     } else if (period === 'week') {
       lbl = d.date.toLocaleDateString('en-US', { weekday: 'narrow' });
     } else if (period === 'month') {
