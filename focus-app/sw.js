@@ -15,6 +15,15 @@ self.addEventListener('activate', e => {
   self.clients.claim();
 });
 
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list =>
+      list.length ? list[0].focus() : self.clients.openWindow('/')
+    )
+  );
+});
+
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (url.pathname.startsWith('/auth/') || url.pathname.startsWith('/api/')) return;

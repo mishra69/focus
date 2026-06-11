@@ -1195,7 +1195,11 @@ async function setActive() {
     await fetch('/api/active', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ startTime: new Date().toISOString(), mode: timerMode })
+      body: JSON.stringify({
+        startTime: new Date(timerStartedAt).toISOString(),
+        mode: timerMode,
+        duration: timerMode === 'countdown' ? totalSeconds : null
+      })
     });
   } catch (e) {}
 }
@@ -1204,12 +1208,7 @@ async function clearActive() {
   try { await fetch('/api/active', { method: 'DELETE' }); } catch (e) {}
 }
 
-function startTimer() {
-  timerState = 'running';
-  timerStartedAt = Date.now();
-  pausedElapsed = 0;
-  elapsedSeconds = 0;
-
+function setRunningUI() {
   document.getElementById('mainBtn').innerHTML = '<span class="live-dot"></span>FOCUSING';
   document.getElementById('mainBtn').classList.add('running');
   document.getElementById('secondaryBtns').style.display = 'flex';
@@ -1218,11 +1217,50 @@ function startTimer() {
   document.getElementById('modeToggle').style.opacity = '0.3';
   document.getElementById('modeToggle').style.pointerEvents = 'none';
   document.getElementById('timerLabel').textContent = 'FOCUSING';
+}
 
+function startTimer() {
+  timerState = 'running';
+  timerStartedAt = Date.now();
+  pausedElapsed = 0;
+  elapsedSeconds = 0;
+
+  setRunningUI();
   intervalId = setInterval(tick, timerMode === 'countup' ? 60000 : 1000);
   playSound('start');
+  requestNotifyPermission();
   acquireWakeLock();
   setActive();
+}
+
+// Pick up a still-running session after the OS killed and reloaded the page
+function resumeSession(active) {
+  timerMode = active.mode;
+  localStorage.setItem('focus_timer_mode', timerMode);
+  document.querySelectorAll('.mode-btn').forEach(b =>
+    b.classList.toggle('active', (b.textContent === 'COUNT UP') === (timerMode === 'countup'))
+  );
+
+  if (timerMode === 'countdown') {
+    const mins = Math.round(active.duration / 60);
+    const step = mins / 10;
+    if (step >= 1 && step <= 12) {
+      document.getElementById('durationSlider').value = step;
+      onSlider(step);
+    }
+    totalSeconds = active.duration;
+  } else {
+    document.getElementById('ringProgress').style.strokeDashoffset = CIRCUMFERENCE;
+  }
+
+  timerState = 'running';
+  timerStartedAt = new Date(active.startTime).getTime();
+  pausedElapsed = 0;
+
+  setRunningUI();
+  intervalId = setInterval(tick, timerMode === 'countup' ? 60000 : 1000);
+  acquireWakeLock();
+  tick();
 }
 
 function tick() {
@@ -1297,6 +1335,7 @@ function completeSession() {
   clearInterval(intervalId);
   saveSession(totalSeconds);
   playSound('complete');
+  notify('Focus', `Session complete 🎉 — ${Math.round(totalSeconds / 60)} min`);
   flashScreen();
   showToast('session complete 🎉', 'success');
   resetTimer();
@@ -1670,6 +1709,61 @@ function renderBarChart(days, period) {
 // ── AUDIO ──
 let audioCtx = null;
 
+function initAudioContext() {
+  if (audioCtx) return;
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    // Play a silent 1-frame buffer — required to unlock Web Audio on iOS PWA
+    const buf = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    src.connect(audioCtx.destination);
+    src.start(0);
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  } catch(e) {}
+}
+
+// Unlock on the very first interaction so it's ready before START is tapped
+document.addEventListener('touchstart', initAudioContext, { once: true, passive: true });
+document.addEventListener('click', initAudioContext, { once: true });
+
+// iOS 17+: route Web Audio as media playback so the silent switch doesn't mute it
+if ('audioSession' in navigator) {
+  try { navigator.audioSession.type = 'playback'; } catch (e) {}
+}
+
+// ── HAPTICS & NOTIFICATIONS ──
+const VIBRATION = {
+  start: [60],
+  complete: [120, 80, 120, 80, 240],
+  discard: [60, 60, 60]
+};
+
+// No-op on iPhone — iOS Safari has no vibration API
+function vibrate(type) {
+  if (navigator.vibrate) {
+    try { navigator.vibrate(VIBRATION[type] || 60); } catch (e) {}
+  }
+}
+
+function requestNotifyPermission() {
+  if ('Notification' in window && Notification.permission === 'default') {
+    try { Notification.requestPermission(); } catch (e) {}
+  }
+}
+
+function notify(title, body) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  if (!document.hidden) return; // app visible — the toast already covers it
+  navigator.serviceWorker.ready
+    .then(reg => reg.showNotification(title, {
+      body,
+      icon: '/icon-192.png',
+      badge: '/icon-192.png'
+    }))
+    .catch(() => {});
+}
+
 function scheduleSound(ctx, type) {
   const t = ctx.currentTime + 0.05;
   const play = (freq, delay, dur, vol = 0.25) => {
@@ -1703,15 +1797,12 @@ function scheduleSound(ctx, type) {
 }
 
 function playSound(type) {
+  vibrate(type);
   try {
-    if (!audioCtx || audioCtx.state === 'closed') {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    }
-    if (audioCtx.state === 'suspended') {
-      audioCtx.resume().then(() => scheduleSound(audioCtx, type));
-    } else {
-      scheduleSound(audioCtx, type);
-    }
+    if (!audioCtx) initAudioContext();
+    if (!audioCtx) return;
+    const go = () => scheduleSound(audioCtx, type);
+    audioCtx.state === 'suspended' ? audioCtx.resume().then(go) : go();
   } catch(e) {}
 }
 
@@ -1816,22 +1907,31 @@ async function checkActiveSession() {
     const elapsed = Math.floor((Date.now() - new Date(active.startTime)) / 1000);
 
     if (active.mode === 'countdown') {
-      // Countdown interrupted = no credit, just clean up silently
-      clearActive();
+      if (!active.duration) { clearActive(); return; } // legacy record, can't resume
+      if (elapsed >= active.duration) {
+        // Finished while the page was dead — credit the full session
+        await saveSession(active.duration);
+        await clearActive();
+        flashScreen();
+        showToast('session complete 🎉', 'success');
+        updateTodayStats();
+      } else {
+        resumeSession(active);
+        showToast('resumed ongoing session', 'success');
+      }
       return;
     }
 
-    // Count up: cap at 2h, save and notify
-    const duration = Math.min(elapsed, MAX_SESSION_SECS);
-    await saveSession(duration);
-    await clearActive();
-
-    const h = Math.floor(duration / 3600);
-    const m = Math.floor((duration % 3600) / 60);
-    const label = h > 0 ? `${h}h ${m}m` : `${m}m`;
-    const capped = elapsed > MAX_SESSION_SECS ? ' (capped at 2h)' : '';
-    showToast(`saved ${label} from earlier session${capped}`, 'success');
-    updateTodayStats();
+    // Count up: resume unless it's stale past the 2h cap
+    if (elapsed >= MAX_SESSION_SECS) {
+      await saveSession(MAX_SESSION_SECS);
+      await clearActive();
+      showToast('saved 2h from earlier session (capped)', 'success');
+      updateTodayStats();
+    } else {
+      resumeSession(active);
+      showToast('resumed ongoing session', 'success');
+    }
   } catch (e) {}
 }
 
