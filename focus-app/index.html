@@ -1711,11 +1711,6 @@ function initAudioContext() {
 document.addEventListener('touchstart', initAudioContext, { once: true, passive: true });
 document.addEventListener('click', initAudioContext, { once: true });
 
-// iOS 17+: route Web Audio as media playback so the silent switch doesn't mute it
-if ('audioSession' in navigator) {
-  try { navigator.audioSession.type = 'playback'; } catch (e) {}
-}
-
 // ── HAPTICS & NOTIFICATIONS ──
 const VIBRATION = {
   start: [60],
