@@ -11,6 +11,7 @@ export default {
     if (url.pathname === '/api/me') return handleMe(request, env);
     if (url.pathname === '/api/sessions') return handleSessions(request, env);
     if (url.pathname === '/api/active') return handleActive(request, env);
+    if (url.pathname === '/api/log') return handleLog(request, env);
 
     return env.ASSETS.fetch(request);
   }
@@ -114,8 +115,25 @@ async function handleSessions(request, env) {
     const newSession = await request.json();
     const data = await env.SESSIONS.get(key);
     const sessions = data ? JSON.parse(data) : [];
-    sessions.unshift(newSession);
-    await env.SESSIONS.put(key, JSON.stringify(sessions));
+    // Idempotent by id so the client's offline-retry queue can't duplicate a session
+    if (!sessions.some(s => s.id === newSession.id)) {
+      sessions.unshift(newSession);
+      await env.SESSIONS.put(key, JSON.stringify(sessions));
+    }
+    return Response.json({ ok: true });
+  }
+
+  return new Response('Method not allowed', { status: 405 });
+}
+
+// Stores the client's rolling diagnostic log so it can be inspected remotely.
+async function handleLog(request, env) {
+  const session = await getSession(request, env);
+  if (!session) return new Response('Unauthorized', { status: 401 });
+
+  if (request.method === 'POST') {
+    const body = await request.text();
+    await env.SESSIONS.put(`log:${session.userId}`, body, { expirationTtl: 60 * 60 * 24 * 14 });
     return Response.json({ ok: true });
   }
 

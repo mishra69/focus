@@ -1082,6 +1082,86 @@
 // ── STATE ──
 let sessions = [];
 
+// ── DIAGNOSTICS & LOCAL PERSISTENCE ──
+// localStorage survives an OS kill of the PWA; in-memory JS state does not.
+// So the in-flight session and a rolling event log live here, network-independent.
+const LS_ACTIVE = 'focus_active';    // the currently-running session
+const LS_PENDING = 'focus_pending';  // completed sessions that failed to reach the server
+const LS_LOG = 'focus_log';          // rolling diagnostic ring buffer
+const LOG_MAX = 80;
+
+function dlog(event, data) {
+  try {
+    const entry = { t: new Date().toISOString(), e: event };
+    if (data !== undefined) entry.d = data;
+    const log = JSON.parse(localStorage.getItem(LS_LOG) || '[]');
+    log.push(entry);
+    while (log.length > LOG_MAX) log.shift();
+    localStorage.setItem(LS_LOG, JSON.stringify(log));
+  } catch (e) {}
+}
+
+// Mirror the local log up to KV so it can be pulled remotely. Best-effort.
+async function flushLog() {
+  try {
+    const log = localStorage.getItem(LS_LOG);
+    if (!log) return;
+    await fetch('/api/log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: log
+    });
+  } catch (e) {}
+}
+
+function activePayload() {
+  return {
+    startTime: new Date(timerStartedAt).toISOString(),
+    mode: timerMode,
+    duration: timerMode === 'countdown' ? totalSeconds : null
+  };
+}
+
+function writeActiveLocal(obj) {
+  try { localStorage.setItem(LS_ACTIVE, JSON.stringify(obj)); } catch (e) {}
+}
+function readActiveLocal() {
+  try { return JSON.parse(localStorage.getItem(LS_ACTIVE) || 'null'); } catch (e) { return null; }
+}
+function clearActiveLocal() {
+  try { localStorage.removeItem(LS_ACTIVE); } catch (e) {}
+}
+
+function queuePending(session) {
+  try {
+    const q = JSON.parse(localStorage.getItem(LS_PENDING) || '[]');
+    if (!q.some(s => s.id === session.id)) q.push(session);
+    localStorage.setItem(LS_PENDING, JSON.stringify(q));
+  } catch (e) {}
+}
+
+// Retry sessions that failed to save earlier. Server is idempotent by id, so safe to re-POST.
+async function flushPending() {
+  let q;
+  try { q = JSON.parse(localStorage.getItem(LS_PENDING) || '[]'); } catch (e) { return; }
+  if (!q.length) return;
+  const remaining = [];
+  for (const session of q) {
+    try {
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(session)
+      });
+      if (!res.ok) throw new Error('status ' + res.status);
+      dlog('pending-flushed', { id: session.id });
+    } catch (e) {
+      remaining.push(session); // still offline — keep for next time
+    }
+  }
+  try { localStorage.setItem(LS_PENDING, JSON.stringify(remaining)); } catch (e) {}
+}
+
 async function loadSessions() {
   try {
     const res = await fetch('/api/sessions');
@@ -1094,13 +1174,19 @@ async function loadSessions() {
 async function saveSession(durationSeconds) {
   const session = { id: Date.now(), date: new Date().toISOString(), duration: durationSeconds };
   sessions.unshift(session);
+  dlog('save', { id: session.id, dur: durationSeconds });
   try {
-    await fetch('/api/sessions', {
+    const res = await fetch('/api/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(session)
     });
-  } catch (e) {}
+    if (!res.ok) throw new Error('status ' + res.status);
+    dlog('save-ok', { id: session.id });
+  } catch (e) {
+    queuePending(session); // offline — durably queue so it isn't lost
+    dlog('save-queued', { id: session.id });
+  }
 }
 let timerMode = localStorage.getItem('focus_timer_mode') || 'countdown';
 let selectedDuration = 30;   // minutes (countdown only)
@@ -1183,20 +1269,19 @@ function handleMainBtn() {
 const MAX_SESSION_SECS = 2 * 60 * 60; // 2 hours cap for recovered sessions
 
 async function setActive() {
+  const payload = activePayload();
+  writeActiveLocal(payload); // synchronous + durable: survives an OS kill of the page
   try {
     await fetch('/api/active', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        startTime: new Date(timerStartedAt).toISOString(),
-        mode: timerMode,
-        duration: timerMode === 'countdown' ? totalSeconds : null
-      })
+      body: JSON.stringify(payload)
     });
   } catch (e) {}
 }
 
 async function clearActive() {
+  clearActiveLocal();
   try { await fetch('/api/active', { method: 'DELETE' }); } catch (e) {}
 }
 
@@ -1223,6 +1308,8 @@ function startTimer() {
   requestNotifyPermission();
   acquireWakeLock();
   setActive();
+  dlog('start', { mode: timerMode, dur: totalSeconds });
+  flushLog();
 }
 
 // Pick up a still-running session after the OS killed and reloaded the page
@@ -1252,6 +1339,7 @@ function resumeSession(active) {
   setRunningUI();
   intervalId = setInterval(tick, timerMode === 'countup' ? 60000 : 1000);
   acquireWakeLock();
+  setActive(); // re-persist locally + to server (covers a resume sourced from either)
   tick();
 }
 
@@ -1301,30 +1389,36 @@ function updateDisplay() {
 function handleStop() {
   if (timerState === 'idle') return;
   if (timerMode === 'countdown') {
+    dlog('stop-discard', { mode: 'countdown' });
     playSound('discard');
     showToast("it's ok, we tried 🌱", 'discard');
   } else {
     const actualElapsed = pausedElapsed + Math.floor((Date.now() - timerStartedAt) / 1000);
     if (actualElapsed >= 10 * 60) {
+      dlog('stop-save', { elapsed: actualElapsed });
       saveSession(actualElapsed);
       playSound('complete');
       showToast('session saved ✓', 'success');
     } else {
+      dlog('stop-discard', { mode: 'countup', elapsed: actualElapsed });
       playSound('discard');
       showToast("it's ok, we tried 🌱", 'discard');
     }
   }
   resetTimer();
+  flushLog();
 }
 
 function completeSession() {
   clearInterval(intervalId);
+  dlog('complete', { dur: totalSeconds });
   saveSession(totalSeconds);
   playSound('complete');
   notify('Focus', `Session complete 🎉 — ${Math.round(totalSeconds / 60)} min`);
   flashScreen();
   showToast('session complete 🎉', 'success');
   resetTimer();
+  flushLog();
 }
 
 function resetTimer() {
@@ -1828,6 +1922,7 @@ document.addEventListener('click', () => {
 
 // Re-acquire if user switches tabs and comes back
 document.addEventListener('visibilitychange', () => {
+  dlog('visibility', { state: document.visibilityState, timer: timerState });
   if (document.visibilityState === 'visible' && timerState === 'running') {
     acquireWakeLock();
     tick(); // recalculate immediately from wall clock — don't wait for next interval
@@ -1877,59 +1972,103 @@ async function triggerInstall() {
   if (outcome === 'accepted') dismissInstall();
 }
 
+// Decide what to do with an in-flight session found on reload: resume, complete, or discard.
+async function recoverActive(active) {
+  if (!active || timerState === 'running') return; // already resumed from another source
+  const elapsed = Math.floor((Date.now() - new Date(active.startTime)) / 1000);
+
+  if (active.mode === 'countdown') {
+    if (!active.duration) { dlog('recover-legacy-discard'); clearActive(); return; }
+    if (elapsed >= active.duration) {
+      // Finished while the page was dead — credit the full session
+      dlog('recover-complete', { dur: active.duration, elapsed });
+      await saveSession(active.duration);
+      await clearActive();
+      flashScreen();
+      showToast('session complete 🎉', 'success');
+      updateTodayStats();
+    } else {
+      dlog('recover-resume', { mode: 'countdown', elapsed, dur: active.duration });
+      resumeSession(active);
+      showToast('resumed ongoing session', 'success');
+    }
+    return;
+  }
+
+  // Count up: resume unless it's stale past the 2h cap
+  if (elapsed >= MAX_SESSION_SECS) {
+    dlog('recover-capped-save', { elapsed });
+    await saveSession(MAX_SESSION_SECS);
+    await clearActive();
+    showToast('saved 2h from earlier session (capped)', 'success');
+    updateTodayStats();
+  } else {
+    dlog('recover-resume', { mode: 'countup', elapsed });
+    resumeSession(active);
+    showToast('resumed ongoing session', 'success');
+  }
+}
+
+// Server-side fallback when there's no durable local copy (e.g. session started on another device)
 async function checkActiveSession() {
   try {
     const res = await fetch('/api/active');
     const active = await res.json();
     if (!active) return;
-
-    const elapsed = Math.floor((Date.now() - new Date(active.startTime)) / 1000);
-
-    if (active.mode === 'countdown') {
-      if (!active.duration) { clearActive(); return; } // legacy record, can't resume
-      if (elapsed >= active.duration) {
-        // Finished while the page was dead — credit the full session
-        await saveSession(active.duration);
-        await clearActive();
-        flashScreen();
-        showToast('session complete 🎉', 'success');
-        updateTodayStats();
-      } else {
-        resumeSession(active);
-        showToast('resumed ongoing session', 'success');
-      }
-      return;
-    }
-
-    // Count up: resume unless it's stale past the 2h cap
-    if (elapsed >= MAX_SESSION_SECS) {
-      await saveSession(MAX_SESSION_SECS);
-      await clearActive();
-      showToast('saved 2h from earlier session (capped)', 'success');
-      updateTodayStats();
-    } else {
-      resumeSession(active);
-      showToast('resumed ongoing session', 'success');
-    }
+    dlog('server-active', active);
+    await recoverActive(active);
   } catch (e) {}
 }
 
 // ── START ──
 async function boot() {
-  const res = await fetch('/api/me');
-  const user = await res.json();
-  if (!user) {
+  dlog('boot', { v: VERSION });
+
+  // Read the durable local session FIRST — this needs no network, so a flaky
+  // connection at wake-up can no longer cause a running session to be dropped.
+  const localActive = readActiveLocal();
+  if (localActive) dlog('boot-local-active', localActive);
+
+  let user = null, neterr = false;
+  try {
+    const res = await fetch('/api/me');
+    user = await res.json();
+  } catch (e) {
+    neterr = true;
+    dlog('boot-me-neterror');
+  }
+
+  // Only the server saying a clean "not signed in" shows the sign-in screen.
+  // A network error must NOT block recovery of a known-good local session.
+  if (!user && !neterr) {
+    dlog('boot-signin');
     document.getElementById('signin-screen').classList.add('visible');
     return;
   }
-  const avatar = document.getElementById('userAvatar');
-  avatar.src = user.picture;
-  avatar.alt = user.name;
-  document.getElementById('userPill').style.display = 'flex';
+
+  if (user) {
+    const avatar = document.getElementById('userAvatar');
+    avatar.src = user.picture;
+    avatar.alt = user.name;
+    document.getElementById('userPill').style.display = 'flex';
+  }
+
   init();
-  loadSessions();
   checkInstall();
-  checkActiveSession();
+
+  // Resume from the local copy immediately, before any further network work.
+  if (localActive) await recoverActive(localActive);
+
+  // Reconcile with the server: retry queued saves first so the history load below
+  // reflects them, then — only if we had no local session — fall back to the
+  // server's active record.
+  try {
+    await flushPending();
+    await loadSessions();
+    if (!localActive) await checkActiveSession();
+  } catch (e) {}
+
+  flushLog();
 }
 
 boot();
