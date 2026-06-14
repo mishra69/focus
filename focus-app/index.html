@@ -575,11 +575,15 @@
 
     .bar-lbl {
       flex: 1;
+      min-width: 0;
       font-size: 9px;
       color: var(--muted);
       letter-spacing: 0.3px;
       text-align: center;
-      overflow: hidden;
+      /* Columns are narrower than a 2-digit label; since day/month only label
+         every Nth (sparse) column, let the centered text spill into the empty
+         neighbours instead of clipping it. */
+      overflow: visible;
       white-space: nowrap;
     }
 
@@ -889,6 +893,37 @@
       background: var(--surface2);
       object-fit: cover;
     }
+
+    /* User dropdown menu */
+    .user-menu {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 4px;
+      min-width: 130px;
+      display: none;
+      z-index: 150;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+    .user-menu.open { display: block; }
+    .user-menu-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      letter-spacing: 0.5px;
+      padding: 10px 14px;
+      border-radius: 7px;
+      cursor: pointer;
+    }
+    .user-menu-item:hover { background: var(--surface2); }
   </style>
 </head>
 <body>
@@ -954,13 +989,16 @@
 
 <nav>
   <span class="nav-logo">focus.<span class="nav-version" id="appVersion"></span></span>
-  <div style="display:flex;align-items:center;gap:8px;">
-    <div class="nav-tabs">
+  <div style="display:flex;align-items:center;gap:8px;position:relative;">
+    <div class="nav-tabs" id="navTabs">
       <button class="nav-tab active" onclick="showView('timer')">TIMER</button>
       <button class="nav-tab" onclick="showView('report')">REPORT</button>
     </div>
-    <div class="user-pill" id="userPill" onclick="window.location='/auth/logout'" style="display:none">
+    <div class="user-pill" id="userPill" onclick="toggleUserMenu(event)" style="display:none">
       <img class="user-avatar" id="userAvatar" src="" alt="" />
+    </div>
+    <div class="user-menu" id="userMenu">
+      <button class="user-menu-item" onclick="window.location='/auth/logout'">Log out</button>
     </div>
   </div>
 </nav>
@@ -1293,7 +1331,19 @@ function setRunningUI() {
   document.getElementById('sliderWrap').style.pointerEvents = 'none';
   document.getElementById('modeToggle').style.opacity = '0.3';
   document.getElementById('modeToggle').style.pointerEvents = 'none';
+  // Lock down navigation during a session — only ending it should be active
+  setNavEnabled(false);
   document.getElementById('timerLabel').textContent = 'FOCUSING';
+}
+
+// Fade + disable the nav tabs and profile menu while a session runs
+function setNavEnabled(on) {
+  ['navTabs', 'userPill'].forEach(id => {
+    const el = document.getElementById(id);
+    el.style.opacity = on ? '1' : '0.3';
+    el.style.pointerEvents = on ? 'auto' : 'none';
+  });
+  if (!on) document.getElementById('userMenu').classList.remove('open');
 }
 
 function startTimer() {
@@ -1437,6 +1487,7 @@ function resetTimer() {
   document.getElementById('sliderWrap').style.pointerEvents = timerMode === 'countup' ? 'none' : 'auto';
   document.getElementById('modeToggle').style.opacity = '1';
   document.getElementById('modeToggle').style.pointerEvents = 'auto';
+  setNavEnabled(true);
   document.getElementById('timerLabel').textContent = 'READY';
   updateDisplay();
   updateTodayStats();
@@ -1478,6 +1529,16 @@ function showView(name) {
   event.target.classList.add('active');
   if (name === 'report') renderReport();
 }
+
+// ── USER MENU ──
+function toggleUserMenu(e) {
+  e.stopPropagation();
+  document.getElementById('userMenu').classList.toggle('open');
+}
+// Close the menu on any click elsewhere
+document.addEventListener('click', () => {
+  document.getElementById('userMenu').classList.remove('open');
+});
 
 // ── REPORT ──
 let currentPeriod = 'week';
