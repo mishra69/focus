@@ -9,3 +9,16 @@ binding = "ASSETS"
 [[kv_namespaces]]
 binding = "SESSIONS"
 id = "efc7612b812440c3be48e3efe5833039"
+
+[vars]
+# Public VAPID key (base64url, 65-byte raw point) from gen-vapid.mjs. Safe to commit.
+# The private half is stored separately: npx wrangler secret put VAPID_PRIVATE_JWK
+VAPID_PUBLIC_KEY = "BON72RoxFSs54A3aL1FrNMuCwhkCSDy77UyATphSlFwBlooXSp2UHsAmpzSs2pn7g4Jthduw_6zsqd2q8hc4lfg"
+
+[[durable_objects.bindings]]
+name = "FOCUS_TIMER"
+class_name = "FocusTimerDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["FocusTimerDO"]

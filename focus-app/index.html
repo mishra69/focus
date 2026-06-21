@@ -1236,7 +1236,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260614_1202';
+const VERSION = '20260620_2041';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -1244,7 +1244,11 @@ function sliderToMin(val) { return val * 10; }
 
 // ── INIT ──
 function init() {
-  document.getElementById('appVersion').textContent = VERSION;
+  const ver = document.getElementById('appVersion');
+  ver.textContent = VERSION;
+  ver.style.cursor = 'pointer';
+  ver.title = 'tap to send a test notification';
+  ver.addEventListener('click', testPush); // hidden debug affordance
   updateTodayDate();
   updateTodayStats();
   onSlider(3); // default 30 min
@@ -1355,7 +1359,7 @@ function startTimer() {
   setRunningUI();
   intervalId = setInterval(tick, timerMode === 'countup' ? 60000 : 1000);
   playSound('start');
-  requestNotifyPermission();
+  ensurePushSubscription(true); // gesture context — ok to prompt for permission here
   acquireWakeLock();
   setActive();
   dlog('start', { mode: timerMode, dur: totalSeconds });
@@ -1464,7 +1468,6 @@ function completeSession() {
   dlog('complete', { dur: totalSeconds });
   saveSession(totalSeconds);
   playSound('complete');
-  notify('Focus', `Session complete 🎉 — ${Math.round(totalSeconds / 60)} min`);
   flashScreen();
   showToast('session complete 🎉', 'success');
   resetTimer();
@@ -1880,23 +1883,8 @@ function vibrate(type) {
   }
 }
 
-function requestNotifyPermission() {
-  if ('Notification' in window && Notification.permission === 'default') {
-    try { Notification.requestPermission(); } catch (e) {}
-  }
-}
-
-function notify(title, body) {
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  if (!document.hidden) return; // app visible — the toast already covers it
-  navigator.serviceWorker.ready
-    .then(reg => reg.showNotification(title, {
-      body,
-      icon: '/icon-192.png',
-      badge: '/icon-192.png'
-    }))
-    .catch(() => {});
-}
+// Completion notifications come from the server (declarative Web Push), not from here —
+// so they fire even when the PWA is backgrounded or killed. See ensurePushSubscription().
 
 function scheduleSound(ctx, type) {
   const t = ctx.currentTime + 0.05;
@@ -1993,6 +1981,63 @@ document.addEventListener('visibilitychange', () => {
 // ── SERVICE WORKER ──
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js');
+}
+
+// ── PUSH SUBSCRIPTION ──
+// Subscribe to Web Push so the server can fire the completion notification regardless of
+// PWA lifecycle. Idempotent: reuses an existing subscription and just re-POSTs it.
+// prompt=true only when called from a user gesture (iOS requires one to request permission).
+async function ensurePushSubscription(prompt) {
+  try {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
+
+    if (Notification.permission === 'default') {
+      if (!prompt) return;
+      if (await Notification.requestPermission() !== 'granted') { dlog('push-perm-denied'); return; }
+    } else if (Notification.permission !== 'granted') {
+      return;
+    }
+
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const { key } = await (await fetch('/api/push/key')).json();
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(key)
+      });
+      dlog('push-subscribed');
+    }
+    await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(sub)
+    });
+  } catch (e) {
+    dlog('push-error', { msg: String((e && e.message) || e) });
+  }
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+// Tap the version label to fire a one-off server push and surface the result.
+async function testPush() {
+  try {
+    await ensurePushSubscription(true); // make sure we're subscribed before testing
+    const data = await (await fetch('/api/push/test', { method: 'POST' })).json();
+    dlog('push-test', data);
+    showToast(data.ok ? `push sent ✓ (${data.status})` : `push failed (${data.status || data.error})`,
+              data.ok ? 'success' : 'discard');
+  } catch (e) {
+    showToast('push test error', 'discard');
+  }
 }
 
 // ── INSTALL PROMPT ──
@@ -2112,6 +2157,7 @@ async function boot() {
     avatar.src = user.picture;
     avatar.alt = user.name;
     document.getElementById('userPill').style.display = 'flex';
+    ensurePushSubscription(false); // re-sync an existing subscription; never prompts here
   }
 
   init();
