@@ -1126,7 +1126,14 @@ let sessions = [];
 const LS_ACTIVE = 'focus_active';    // the currently-running session
 const LS_PENDING = 'focus_pending';  // completed sessions that failed to reach the server
 const LS_LOG = 'focus_log';          // rolling diagnostic ring buffer
-const LOG_MAX = 80;
+const LS_AUDIT = 'focus_audit';      // durable, low-frequency session-lifecycle audit trail
+const LS_AUDIT_SENT = 'focus_audit_sent'; // timestamp of the last audit entry mirrored to KV
+// The diagnostic log is high-frequency (every visibility flip etc.), so even a big buffer only
+// spans a day or two. LOG_MAX is still generous, but the audit trail below is the thing that
+// survives: it only records session-ending / recovery events, so its buffer covers many months
+// and — crucially — it's never clobbered by the noisy diagnostic log.
+const LOG_MAX = 500;
+const AUDIT_MAX = 1000;
 
 function dlog(event, data) {
   try {
@@ -1139,6 +1146,23 @@ function dlog(event, data) {
   } catch (e) {}
 }
 
+// Record a significant session-lifecycle event (save / complete / any recovery outcome) to the
+// durable audit trail. Carry enough to later tell a legit long session from an abandonment:
+// the true `elapsed` since start, what was `credited`, and the recovery `source`. Best-effort
+// mirror to its own KV key so it outlives the rolling diagnostic log.
+function alog(event, data) {
+  try {
+    const entry = { t: new Date().toISOString(), e: event };
+    if (data !== undefined) entry.d = data;
+    const log = JSON.parse(localStorage.getItem(LS_AUDIT) || '[]');
+    log.push(entry);
+    while (log.length > AUDIT_MAX) log.shift();
+    localStorage.setItem(LS_AUDIT, JSON.stringify(log));
+  } catch (e) {}
+  dlog(event, data);   // also drop a copy into the diagnostic stream for local-timeline context
+  flushAudit();        // fire-and-forget; boot() also flushes to catch anything sent while offline
+}
+
 // Mirror the local log up to KV so it can be pulled remotely. Best-effort.
 async function flushLog() {
   try {
@@ -1149,6 +1173,26 @@ async function flushLog() {
       headers: { 'Content-Type': 'application/json' },
       body: log
     });
+  } catch (e) {}
+}
+
+// Mirror the durable audit trail to its own KV key (no TTL server-side). Best-effort.
+// Dirty-guarded: only re-uploads when a new audit entry exists since the last successful send,
+// so idle app opens (which re-run this) don't keep re-POSTing the whole (growing) array.
+async function flushAudit() {
+  try {
+    const raw = localStorage.getItem(LS_AUDIT);
+    if (!raw) return;
+    const arr = JSON.parse(raw);
+    if (!arr.length) return;
+    const lastT = arr[arr.length - 1].t;
+    if (localStorage.getItem(LS_AUDIT_SENT) === lastT) return; // nothing new since last upload
+    await fetch('/api/audit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: raw
+    });
+    localStorage.setItem(LS_AUDIT_SENT, lastT); // only advance the marker on success
   } catch (e) {}
 }
 
@@ -1236,7 +1280,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260620_2041';
+const VERSION = '20260726_0111';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -1449,7 +1493,7 @@ function handleStop() {
   } else {
     const actualElapsed = pausedElapsed + Math.floor((Date.now() - timerStartedAt) / 1000);
     if (actualElapsed >= 10 * 60) {
-      dlog('stop-save', { elapsed: actualElapsed });
+      alog('stop-save', { mode: 'countup', elapsed: actualElapsed, credited: actualElapsed });
       saveSession(actualElapsed);
       playSound('complete');
       showToast('session saved ✓', 'success');
@@ -1465,7 +1509,7 @@ function handleStop() {
 
 function completeSession() {
   clearInterval(intervalId);
-  dlog('complete', { dur: totalSeconds });
+  alog('complete', { mode: 'countdown', credited: totalSeconds });
   saveSession(totalSeconds);
   playSound('complete');
   flashScreen();
@@ -2079,22 +2123,23 @@ async function triggerInstall() {
 }
 
 // Decide what to do with an in-flight session found on reload: resume, complete, or discard.
-async function recoverActive(active) {
+async function recoverActive(active, source) {
   if (!active || timerState === 'running') return; // already resumed from another source
   const elapsed = Math.floor((Date.now() - new Date(active.startTime)) / 1000);
+  const base = { start: active.startTime, elapsed, source }; // shared audit context
 
   if (active.mode === 'countdown') {
-    if (!active.duration) { dlog('recover-legacy-discard'); clearActive(); return; }
+    if (!active.duration) { alog('recover-legacy-discard', base); clearActive(); return; }
     if (elapsed >= active.duration) {
       // Finished while the page was dead — credit the full session
-      dlog('recover-complete', { dur: active.duration, elapsed });
+      alog('recover-complete', { ...base, mode: 'countdown', credited: active.duration });
       await saveSession(active.duration);
       await clearActive();
       flashScreen();
       showToast('session complete 🎉', 'success');
       updateTodayStats();
     } else {
-      dlog('recover-resume', { mode: 'countdown', elapsed, dur: active.duration });
+      alog('recover-resume', { ...base, mode: 'countdown', dur: active.duration });
       resumeSession(active);
       showToast('resumed ongoing session', 'success');
     }
@@ -2103,13 +2148,16 @@ async function recoverActive(active) {
 
   // Count up: resume unless it's stale past the 2h cap
   if (elapsed >= MAX_SESSION_SECS) {
-    dlog('recover-capped-save', { elapsed });
+    // NOTE: `elapsed` here is the true gap since start. A value just over the cap = a genuine
+    // long session reopened late; a huge value = an abandoned timer. The audit trail preserves
+    // it so the two are always distinguishable after the fact.
+    alog('recover-capped-save', { ...base, mode: 'countup', credited: MAX_SESSION_SECS });
     await saveSession(MAX_SESSION_SECS);
     await clearActive();
     showToast('saved 2h from earlier session (capped)', 'success');
     updateTodayStats();
   } else {
-    dlog('recover-resume', { mode: 'countup', elapsed });
+    alog('recover-resume', { ...base, mode: 'countup' });
     resumeSession(active);
     showToast('resumed ongoing session', 'success');
   }
@@ -2122,7 +2170,7 @@ async function checkActiveSession() {
     const active = await res.json();
     if (!active) return;
     dlog('server-active', active);
-    await recoverActive(active);
+    await recoverActive(active, 'server');
   } catch (e) {}
 }
 
@@ -2164,7 +2212,7 @@ async function boot() {
   checkInstall();
 
   // Resume from the local copy immediately, before any further network work.
-  if (localActive) await recoverActive(localActive);
+  if (localActive) await recoverActive(localActive, 'local');
 
   // Reconcile with the server: retry queued saves first so the history load below
   // reflects them, then — only if we had no local session — fall back to the
@@ -2176,6 +2224,7 @@ async function boot() {
   } catch (e) {}
 
   flushLog();
+  flushAudit(); // mirror any recovery events recorded above (esp. ones logged before net was up)
 }
 
 boot();

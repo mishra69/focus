@@ -15,6 +15,7 @@ export default {
     if (url.pathname === '/api/sessions') return handleSessions(request, env);
     if (url.pathname === '/api/active') return handleActive(request, env);
     if (url.pathname === '/api/log') return handleLog(request, env);
+    if (url.pathname === '/api/audit') return handleAudit(request, env);
     if (url.pathname === '/api/push/key') return Response.json({ key: env.VAPID_PUBLIC_KEY });
     if (url.pathname === '/api/push/subscribe') return handlePushSubscribe(request, env);
     if (url.pathname === '/api/push/test') return handlePushTest(request, env);
@@ -147,6 +148,27 @@ async function handleLog(request, env) {
   if (request.method === 'POST') {
     const body = await request.text();
     await env.SESSIONS.put(`log:${session.userId}`, body, { expirationTtl: 60 * 60 * 24 * 14 });
+    return Response.json({ ok: true });
+  }
+
+  return new Response('Method not allowed', { status: 405 });
+}
+
+// Durable audit trail of session-lifecycle events (saves, completions, recovery outcomes).
+// Unlike the diagnostic log this has NO expiry — it's the long-term record for telling a
+// legit long session apart from an abandoned-timer cap, so it must outlive the 14-day log.
+async function handleAudit(request, env) {
+  const session = await getSession(request, env);
+  if (!session) return new Response('Unauthorized', { status: 401 });
+
+  if (request.method === 'GET') {
+    const raw = await env.SESSIONS.get(`audit:${session.userId}`);
+    return new Response(raw || '[]', { headers: { 'Content-Type': 'application/json' } });
+  }
+
+  if (request.method === 'POST') {
+    const body = await request.text();
+    await env.SESSIONS.put(`audit:${session.userId}`, body); // no TTL: durable
     return Response.json({ ok: true });
   }
 
