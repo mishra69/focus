@@ -279,23 +279,36 @@ function hostOf(url) {
   try { return new URL(url).host; } catch (e) { return null; }
 }
 
-// ── COMPLETION SCHEDULING (Durable Object alarm per user) ──
+// ── ALARM SCHEDULING (Durable Object alarm per user) ──
+// Countdown → one alarm at the completion instant (completion push).
+// Count-up  → recurring "still focusing?" check-ins at 60m, then every 30m, capped at 6h.
+
+const CHECKIN_FIRST_MS = 60 * 60 * 1000;    // first count-up check-in 60 min in
+const CHECKIN_INTERVAL_MS = 30 * 60 * 1000; // then every 30 min
+const CHECKIN_MAX_MS = 6 * 60 * 60 * 1000;  // stop pinging past 6h (assume abandoned)
+const TTL_COMPLETE = 6 * 60 * 60;           // completion push held up to 6h if device offline
+const TTL_CHECKIN = 30 * 60;                 // a check-in is stale after its interval; let it expire
+
+// Next count-up check-in instant (fixed cadence from start), or null once past the cap.
+function nextCheckin(start, now) {
+  const first = start + CHECKIN_FIRST_MS;
+  const fireAt = now < first
+    ? first
+    : first + (Math.floor((now - first) / CHECKIN_INTERVAL_MS) + 1) * CHECKIN_INTERVAL_MS;
+  return fireAt <= start + CHECKIN_MAX_MS ? fireAt : null;
+}
 
 function timerStub(env, userId) {
   return env.FOCUS_TIMER.get(env.FOCUS_TIMER.idFromName(userId));
 }
 
-// Countdown sessions get an alarm at their completion instant; anything else clears it.
+// Hand the active session to the DO, which arms the right alarm; non-timer states clear it.
 async function scheduleCompletion(env, userId, active) {
   try {
     const stub = timerStub(env, userId);
-    if (active && active.mode === 'countdown' && active.duration && active.startTime) {
-      const fireAt = Date.parse(active.startTime) + active.duration * 1000;
-      if (fireAt > Date.now()) {
-        await stub.schedule(userId, fireAt);
-        await pushLog(env, userId, 'schedule', { fireAt: new Date(fireAt).toISOString() });
-        return;
-      }
+    if (active && (active.mode === 'countdown' || active.mode === 'countup') && active.startTime) {
+      await stub.schedule(userId, active);
+      return;
     }
     await stub.cancel();
     await pushLog(env, userId, 'schedule-skip', { mode: active && active.mode });
@@ -311,61 +324,123 @@ async function cancelCompletion(env, userId) {
   } catch (e) {}
 }
 
-// ── DURABLE OBJECT: one per user, fires the completion push via setAlarm() ──
+// ── DURABLE OBJECT: one per user. Fires completion (countdown) or check-in (count-up) pushes. ──
 
 export class FocusTimerDO extends DurableObject {
-  async schedule(userId, fireAt) {
-    await this.ctx.storage.put('userId', userId);
-    await this.ctx.storage.setAlarm(fireAt);
+  // Persist the active session and arm the next alarm for it.
+  async schedule(userId, active) {
+    await this.ctx.storage.put({
+      userId,
+      mode: active.mode,
+      startTime: active.startTime,
+      duration: active.duration || null
+    });
+    await this.#arm();
   }
 
   async cancel() {
     await this.ctx.storage.deleteAlarm();
-    await this.ctx.storage.delete('userId');
+    await this.#clear();
+  }
+
+  async #clear() {
+    await this.ctx.storage.delete(['userId', 'mode', 'startTime', 'duration', 'kind']);
+  }
+
+  // Compute the next alarm from stored state and set it; clears everything once nothing is due.
+  async #arm() {
+    const s = await this.ctx.storage.get(['userId', 'mode', 'startTime', 'duration']);
+    const userId = s.get('userId'), mode = s.get('mode');
+    const start = Date.parse(s.get('startTime'));
+    const now = Date.now();
+
+    let fireAt = null, kind = null;
+    if (mode === 'countdown') {
+      const dur = s.get('duration');
+      const t = dur ? start + dur * 1000 : 0;
+      if (t > now) { fireAt = t; kind = 'complete'; }
+    } else if (mode === 'countup') {
+      fireAt = nextCheckin(start, now);
+      kind = 'checkin';
+    }
+
+    if (fireAt) {
+      await this.ctx.storage.put('kind', kind);
+      await this.ctx.storage.setAlarm(fireAt);
+      await pushLog(this.env, userId, 'schedule', { kind, fireAt: new Date(fireAt).toISOString() });
+    } else {
+      await this.ctx.storage.deleteAlarm();
+      await pushLog(this.env, userId, 'schedule-skip', { mode });
+      await this.#clear();
+    }
   }
 
   async alarm(alarmInfo) {
-    const userId = await this.ctx.storage.get('userId');
+    const s = await this.ctx.storage.get(['userId', 'startTime', 'kind']);
+    const userId = s.get('userId');
     if (!userId) return;
-    await pushLog(this.env, userId, 'alarm-fire', { retry: alarmInfo && alarmInfo.retryCount });
+    const kind = s.get('kind');
+    await pushLog(this.env, userId, 'alarm-fire', { kind, retry: alarmInfo && alarmInfo.retryCount });
 
     const raw = await this.env.SESSIONS.get(`push:${userId}`);
     if (!raw) { // never subscribed
       await pushLog(this.env, userId, 'alarm-no-subscription');
-      await this.ctx.storage.delete('userId');
+      await this.#clear();
       return;
     }
-
     const sub = JSON.parse(raw);
-    const payload = JSON.stringify({
-      web_push: 8030,
-      notification: {
-        title: 'Focus',
-        body: 'Session complete 🎉',
-        navigate: `${APP_ORIGIN}/`,
-        icon: '/icon-192.png',
-        tag: 'focus-complete'
-      }
-    });
+
+    let payload, ttl;
+    if (kind === 'checkin') {
+      const mins = Math.max(1, Math.round((Date.now() - Date.parse(s.get('startTime'))) / 60000)) || 1;
+      payload = JSON.stringify({
+        web_push: 8030,
+        notification: {
+          title: 'Still focusing?',
+          body: `${mins} min in — open Focus to keep the timer running, or stop it.`,
+          navigate: `${APP_ORIGIN}/`,
+          icon: '/icon-192.png',
+          tag: 'focus-checkin'
+        }
+      });
+      ttl = TTL_CHECKIN;
+    } else {
+      payload = JSON.stringify({
+        web_push: 8030,
+        notification: {
+          title: 'Focus',
+          body: 'Session complete 🎉',
+          navigate: `${APP_ORIGIN}/`,
+          icon: '/icon-192.png',
+          tag: 'focus-complete'
+        }
+      });
+      ttl = TTL_COMPLETE;
+    }
 
     let res;
     try {
-      res = await sendWebPush(this.env, sub, payload);
+      res = await sendWebPush(this.env, sub, payload, ttl);
     } catch (e) {
-      await pushLog(this.env, userId, 'alarm-send-error', { msg: String((e && e.message) || e) });
-      if (alarmInfo && alarmInfo.retryCount >= 5) { await this.ctx.storage.delete('userId'); return; }
+      await pushLog(this.env, userId, 'alarm-send-error', { kind, msg: String((e && e.message) || e) });
+      if (alarmInfo && alarmInfo.retryCount >= 5) { await this.#clear(); return; }
       throw e; // let the alarm retry with backoff
     }
 
-    await pushLog(this.env, userId, 'alarm-send', { status: res.status });
+    await pushLog(this.env, userId, 'alarm-send', { kind, status: res.status });
     if (res.status === 404 || res.status === 410) {
       await this.env.SESSIONS.delete(`push:${userId}`); // subscription gone for good
+      await this.#clear();
+      return;
     } else if (!res.ok) {
       // Transient push-service error: let the alarm retry with backoff, then give up.
-      if (alarmInfo && alarmInfo.retryCount >= 5) { await this.ctx.storage.delete('userId'); return; }
+      if (alarmInfo && alarmInfo.retryCount >= 5) { await this.#clear(); return; }
       throw new Error(`push failed: ${res.status}`);
     }
-    await this.ctx.storage.delete('userId');
+
+    // Completion is one-shot; a check-in re-arms the next one (until the 6h cap).
+    if (kind === 'checkin') await this.#arm();
+    else await this.#clear();
   }
 }
 
@@ -373,13 +448,14 @@ export class FocusTimerDO extends DurableObject {
 
 // The encrypted body is delivered to the service worker's `push` handler, which renders it.
 // (No application/notification+json content-type — that declarative path didn't render on iOS.)
-async function sendWebPush(env, sub, payloadJson) {
+// `ttl` is how long the push service holds the message if the device is offline (seconds).
+async function sendWebPush(env, sub, payloadJson, ttl = 600) {
   const body = await encryptPayload(payloadJson, sub.keys.p256dh, sub.keys.auth);
   const authorization = await vapidAuthHeader(env, sub.endpoint);
   return fetch(sub.endpoint, {
     method: 'POST',
     headers: {
-      'TTL': '600',
+      'TTL': String(ttl),
       'Content-Encoding': 'aes128gcm',
       'Urgency': 'high',
       'Authorization': authorization
