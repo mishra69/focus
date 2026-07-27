@@ -1,4 +1,4 @@
-const CACHE = 'focus-v6';
+const CACHE = 'focus-v7';
 const ASSETS = ['/', '/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -15,9 +15,31 @@ self.addEventListener('activate', e => {
   self.clients.claim();
 });
 
-// Completion notifications use Declarative Web Push (Content-Type: application/notification+json):
-// the system renders them and handles the tap via the payload's `navigate` URL, so no `push`
-// or `notificationclick` handler is needed here.
+// The browser decrypts the push payload and hands it to us here already-decrypted. We accept
+// either the declarative shape ({ notification: {...} }) or a flat { title, body, ... }.
+self.addEventListener('push', e => {
+  let data = {};
+  try { data = e.data ? e.data.json() : {}; } catch (err) { data = {}; }
+  const n = data.notification || data;
+  e.waitUntil(self.registration.showNotification(n.title || 'Focus', {
+    body: n.body || '',
+    icon: n.icon || '/icon-192.png',
+    badge: '/icon-192.png',
+    tag: n.tag || 'focus',
+    data: { url: n.navigate || n.url || '/' }
+  }));
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || '/';
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+      for (const c of list) { if ('focus' in c) return c.focus(); }
+      return self.clients.openWindow(url);
+    })
+  );
+});
 
 // If the push service rotates/invalidates the subscription, re-subscribe and re-register it.
 self.addEventListener('pushsubscriptionchange', e => {

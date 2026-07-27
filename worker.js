@@ -241,7 +241,7 @@ async function handlePushTest(request, env) {
 
   let status = 0, error = null;
   try {
-    const res = await sendDeclarativePush(env, JSON.parse(raw), payload);
+    const res = await sendWebPush(env, JSON.parse(raw), payload);
     status = res.status;
     if (res.status === 404 || res.status === 410) await env.SESSIONS.delete(`push:${session.userId}`);
   } catch (e) {
@@ -350,7 +350,7 @@ export class FocusTimerDO extends DurableObject {
 
     let res;
     try {
-      res = await sendDeclarativePush(this.env, sub, payload);
+      res = await sendWebPush(this.env, sub, payload);
     } catch (e) {
       await pushLog(this.env, userId, 'alarm-send-error', { msg: String((e && e.message) || e) });
       if (alarmInfo && alarmInfo.retryCount >= 5) { await this.ctx.storage.delete('userId'); return; }
@@ -371,9 +371,9 @@ export class FocusTimerDO extends DurableObject {
 
 // ── WEB PUSH: RFC 8291 (aes128gcm payload) + RFC 8292 (VAPID) ──
 
-// Declarative push: the encrypted body is application/notification+json, so Safari renders
-// it directly without a service-worker `push` event handler.
-async function sendDeclarativePush(env, sub, payloadJson) {
+// The encrypted body is delivered to the service worker's `push` handler, which renders it.
+// (No application/notification+json content-type — that declarative path didn't render on iOS.)
+async function sendWebPush(env, sub, payloadJson) {
   const body = await encryptPayload(payloadJson, sub.keys.p256dh, sub.keys.auth);
   const authorization = await vapidAuthHeader(env, sub.endpoint);
   return fetch(sub.endpoint, {
@@ -381,7 +381,6 @@ async function sendDeclarativePush(env, sub, payloadJson) {
     headers: {
       'TTL': '600',
       'Content-Encoding': 'aes128gcm',
-      'Content-Type': 'application/notification+json',
       'Urgency': 'high',
       'Authorization': authorization
     },
