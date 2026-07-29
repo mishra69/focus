@@ -725,6 +725,62 @@
     /* Bottom padding for Safari home indicator */
     .view { padding-bottom: env(safe-area-inset-bottom); }
 
+    /* Confirm modal (centered dialog) */
+    #confirm-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 300;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    #confirm-modal.visible { display: flex; }
+    .modal-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+    }
+    .modal-card {
+      position: relative;
+      width: 100%;
+      max-width: 360px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .modal-title {
+      font-family: 'Fraunces', serif;
+      font-size: 20px;
+      font-weight: 200;
+      color: var(--text);
+    }
+    .modal-body {
+      font-size: 14px;
+      line-height: 1.5;
+      color: var(--muted);
+    }
+    .modal-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 8px;
+    }
+    .modal-btn {
+      flex: 1;
+      padding: 12px;
+      border-radius: 12px;
+      border: none;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .modal-btn.primary { background: var(--accent); color: #0d0d12; }
+    .modal-btn.secondary { background: var(--surface2); color: var(--text); }
+
     /* Install overlay */
     #install-sheet {
       display: none;
@@ -931,6 +987,19 @@
 <div class="flash-overlay" id="flashOverlay"></div>
 <div class="toast" id="toast"></div>
 <div class="dim-tap-hint">TAP TO BRIGHTEN</div>
+
+<!-- CONFIRM MODAL (abandonment prompt etc.) -->
+<div id="confirm-modal">
+  <div class="modal-backdrop"></div>
+  <div class="modal-card">
+    <div class="modal-title" id="confirm-title"></div>
+    <div class="modal-body" id="confirm-body"></div>
+    <div class="modal-actions">
+      <button class="modal-btn secondary" id="confirm-cancel"></button>
+      <button class="modal-btn primary" id="confirm-ok"></button>
+    </div>
+  </div>
+</div>
 
 <!-- INSTALL SHEET -->
 <div id="install-sheet">
@@ -1253,8 +1322,12 @@ async function loadSessions() {
   } catch (e) {}
 }
 
-async function saveSession(durationSeconds) {
-  const session = { id: Date.now(), date: new Date().toISOString(), duration: durationSeconds };
+// `id` is optional: recovery/finalize paths pass a deterministic id derived from the session's
+// start time, so the same real session can never be banked twice (server dedupes by id, and the
+// in-memory guard below stops a local double). Normal live saves omit it and use Date.now().
+async function saveSession(durationSeconds, id) {
+  const session = { id: id || Date.now(), date: new Date().toISOString(), duration: durationSeconds };
+  if (sessions.some(s => s.id === session.id)) return; // already recorded
   sessions.unshift(session);
   dlog('save', { id: session.id, dur: durationSeconds });
   try {
@@ -1280,7 +1353,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260726_2124';
+const VERSION = '20260726_2355';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -1558,6 +1631,38 @@ function showToast(message, type) {
   toast.addEventListener('animationend', () => {
     toast.className = 'toast';
   }, { once: true });
+}
+
+// "5400" -> "1h 30m". Used in the abandonment prompt so the user sees the real elapsed.
+function fmtDuration(secs) {
+  const h = Math.floor(secs / 3600), m = Math.round((secs % 3600) / 60);
+  if (h && m) return `${h}h ${m}m`;
+  if (h) return `${h}h`;
+  return `${m}m`;
+}
+
+// Promise-based two-button modal. Resolves true (primary/ok) or false (secondary/cancel).
+function confirmDialog(title, body, okText, cancelText) {
+  return new Promise(resolve => {
+    const overlay = document.getElementById('confirm-modal');
+    document.getElementById('confirm-title').textContent = title;
+    document.getElementById('confirm-body').textContent = body;
+    const ok = document.getElementById('confirm-ok');
+    const cancel = document.getElementById('confirm-cancel');
+    ok.textContent = okText;
+    cancel.textContent = cancelText;
+    overlay.classList.add('visible');
+    const done = val => {
+      overlay.classList.remove('visible');
+      ok.removeEventListener('click', onOk);
+      cancel.removeEventListener('click', onCancel);
+      resolve(val);
+    };
+    const onOk = () => done(true);
+    const onCancel = () => done(false);
+    ok.addEventListener('click', onOk);
+    cancel.addEventListener('click', onCancel);
+  });
 }
 
 function updateTodayStats() {
@@ -2146,15 +2251,26 @@ async function recoverActive(active, source) {
     return;
   }
 
-  // Count up: resume unless it's stale past the 2h cap
+  // Count up: resume if fresh; past the 2h mark it's ambiguous (a genuine long session reopened
+  // late vs. an abandoned timer) so we ASK rather than silently banking a capped 120.
   if (elapsed >= MAX_SESSION_SECS) {
-    // NOTE: `elapsed` here is the true gap since start. A value just over the cap = a genuine
-    // long session reopened late; a huge value = an abandoned timer. The audit trail preserves
-    // it so the two are always distinguishable after the fact.
-    alog('recover-capped-save', { ...base, mode: 'countup', credited: MAX_SESSION_SECS });
-    await saveSession(MAX_SESSION_SECS);
-    await clearActive();
-    showToast('saved 2h from earlier session (capped)', 'success');
+    const detId = new Date(active.startTime).getTime(); // deterministic — can't double-count
+    await clearActive(); // a decision is being made now; stop the timer + its check-in alarm
+    const human = fmtDuration(elapsed);
+    alog('recover-abandoned-prompt', { ...base });
+    const keep = await confirmDialog(
+      'Timer left running',
+      `A count-up has been running for ${human}. Save it as a focus session, or discard it?`,
+      `Save ${human}`, 'Discard'
+    );
+    if (keep) {
+      alog('recover-abandoned-save', { ...base, credited: elapsed, id: detId });
+      await saveSession(elapsed, detId); // credit the REAL elapsed, not a cap
+      showToast('session saved ✓', 'success');
+    } else {
+      alog('recover-abandoned-discard', { ...base });
+      showToast("discarded 🌱", 'discard');
+    }
     updateTodayStats();
   } else {
     alog('recover-resume', { ...base, mode: 'countup' });
