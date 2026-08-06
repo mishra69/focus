@@ -1354,20 +1354,23 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260805_2020';
+const VERSION = '20260805_2046';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
 function sliderToMin(val) { return val * 10; }
 
-// Slider is irrelevant in count-up mode (no fixed duration), so hide it entirely;
-// in countdown mode it's just dimmed/disabled while a session is running.
+// Slider is irrelevant in count-up mode (no fixed duration), so hide it entirely; it stays laid
+// out (visibility, not display) so the mode toggle/button above and below it don't shift position.
+// In countdown mode it's just dimmed/disabled while a session is running.
 function updateSliderVisibility() {
   const sliderWrap = document.getElementById('sliderWrap');
   if (timerMode === 'countup') {
-    sliderWrap.style.display = 'none';
+    sliderWrap.style.visibility = 'hidden';
+    sliderWrap.style.opacity = '0';
+    sliderWrap.style.pointerEvents = 'none';
   } else {
-    sliderWrap.style.display = '';
+    sliderWrap.style.visibility = 'visible';
     sliderWrap.style.opacity = timerState === 'idle' ? '1' : '0.3';
     sliderWrap.style.pointerEvents = timerState === 'idle' ? 'auto' : 'none';
   }
