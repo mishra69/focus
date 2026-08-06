@@ -450,7 +450,8 @@
       color: var(--muted);
       font-size: 24px;
       cursor: pointer;
-      padding: 0 8px;
+      padding: 14px 16px;
+      margin: -14px -8px;
       line-height: 1;
     }
 
@@ -1353,11 +1354,24 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260726_2355';
+const VERSION = '20260805_2020';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
 function sliderToMin(val) { return val * 10; }
+
+// Slider is irrelevant in count-up mode (no fixed duration), so hide it entirely;
+// in countdown mode it's just dimmed/disabled while a session is running.
+function updateSliderVisibility() {
+  const sliderWrap = document.getElementById('sliderWrap');
+  if (timerMode === 'countup') {
+    sliderWrap.style.display = 'none';
+  } else {
+    sliderWrap.style.display = '';
+    sliderWrap.style.opacity = timerState === 'idle' ? '1' : '0.3';
+    sliderWrap.style.pointerEvents = timerState === 'idle' ? 'auto' : 'none';
+  }
+}
 
 // ── INIT ──
 function init() {
@@ -1374,8 +1388,7 @@ function init() {
     document.querySelectorAll('.mode-btn').forEach(b =>
       b.classList.toggle('active', b.textContent === 'COUNT UP')
     );
-    document.getElementById('sliderWrap').style.opacity = '0.3';
-    document.getElementById('sliderWrap').style.pointerEvents = 'none';
+    updateSliderVisibility();
     document.getElementById('ringProgress').style.strokeDashoffset = CIRCUMFERENCE;
   }
 }
@@ -1394,18 +1407,13 @@ function setMode(mode) {
   document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
   event.target.classList.add('active');
 
-  const sliderWrap = document.getElementById('sliderWrap');
   const ring = document.getElementById('ringProgress');
 
+  updateSliderVisibility();
   if (mode === 'countup') {
-    sliderWrap.style.opacity = '0.3';
-    sliderWrap.style.pointerEvents = 'none';
     elapsedSeconds = 0;
     ring.style.strokeDashoffset = CIRCUMFERENCE; // empty ring for countup
     document.getElementById('timerLabel').textContent = 'READY';
-  } else {
-    sliderWrap.style.opacity = '1';
-    sliderWrap.style.pointerEvents = 'auto';
   }
   updateDisplay();
 }
@@ -1448,8 +1456,7 @@ function setRunningUI() {
   document.getElementById('mainBtn').innerHTML = '<span class="live-dot"></span>FOCUSING';
   document.getElementById('mainBtn').classList.add('running');
   document.getElementById('secondaryBtns').style.display = 'flex';
-  document.getElementById('sliderWrap').style.opacity = '0.3';
-  document.getElementById('sliderWrap').style.pointerEvents = 'none';
+  updateSliderVisibility();
   document.getElementById('modeToggle').style.opacity = '0.3';
   document.getElementById('modeToggle').style.pointerEvents = 'none';
   // Lock down navigation during a session — only ending it should be active
@@ -1479,6 +1486,7 @@ function startTimer() {
   ensurePushSubscription(true); // gesture context — ok to prompt for permission here
   acquireWakeLock();
   setActive();
+  if (timerMode === 'countup') startHeartbeat();
   dlog('start', { mode: timerMode, dur: totalSeconds });
   flushLog();
 }
@@ -1511,6 +1519,7 @@ function resumeSession(active) {
   intervalId = setInterval(tick, timerMode === 'countup' ? 60000 : 1000);
   acquireWakeLock();
   setActive(); // re-persist locally + to server (covers a resume sourced from either)
+  if (timerMode === 'countup') startHeartbeat();
   tick();
 }
 
@@ -1594,6 +1603,7 @@ function completeSession() {
 function resetTimer() {
   clearInterval(intervalId);
   releaseWakeLock();
+  stopHeartbeat();
   clearActive();
   timerState = 'idle';
   timerStartedAt = null;
@@ -1603,8 +1613,7 @@ function resetTimer() {
   document.getElementById('mainBtn').textContent = 'START FOCUS';
   document.getElementById('mainBtn').classList.remove('running');
   document.getElementById('secondaryBtns').style.display = 'none';
-  document.getElementById('sliderWrap').style.opacity = timerMode === 'countup' ? '0.3' : '1';
-  document.getElementById('sliderWrap').style.pointerEvents = timerMode === 'countup' ? 'none' : 'auto';
+  updateSliderVisibility();
   document.getElementById('modeToggle').style.opacity = '1';
   document.getElementById('modeToggle').style.pointerEvents = 'auto';
   setNavEnabled(true);
@@ -2097,6 +2106,27 @@ function releaseWakeLock() {
   clearTimeout(dimTimeout);
 }
 
+// ── HEARTBEAT (count-up only) ──
+// While a count-up is on screen, ping the server every few minutes so it knows we're present and
+// suppresses "still focusing?" check-ins. When these stop (app backgrounded/killed), the server's
+// grace window lapses and check-ins begin. iOS freezes JS in the background so pings stop on their
+// own; the visibility guard covers throttled desktop background tabs.
+const HEARTBEAT_MS = 3 * 60 * 1000;
+let heartbeatId = null;
+function sendHeartbeat() {
+  try { fetch('/api/heartbeat', { method: 'POST' }); } catch (e) {}
+}
+function startHeartbeat() {
+  stopHeartbeat();
+  sendHeartbeat(); // refresh lastSeen immediately
+  heartbeatId = setInterval(() => {
+    if (document.visibilityState === 'visible') sendHeartbeat();
+  }, HEARTBEAT_MS);
+}
+function stopHeartbeat() {
+  if (heartbeatId) { clearInterval(heartbeatId); heartbeatId = null; }
+}
+
 function scheduleDim() {
   clearTimeout(dimTimeout);
   dimTimeout = setTimeout(() => {
@@ -2124,6 +2154,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && timerState === 'running') {
     acquireWakeLock();
     tick(); // recalculate immediately from wall clock — don't wait for next interval
+    if (timerMode === 'countup') startHeartbeat(); // refresh lastSeen + restart pings
   }
 });
 
