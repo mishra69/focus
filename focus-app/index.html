@@ -312,15 +312,18 @@
     }
 
     .slider-ticks {
-      display: flex;
-      justify-content: space-between;
-      padding: 0 2px;
+      position: relative;
+      height: 11px;
     }
 
     .slider-tick {
+      position: absolute;
+      top: 0;
+      transform: translateX(-50%);
       font-size: 9px;
       color: var(--muted);
       letter-spacing: 0.3px;
+      white-space: nowrap;
     }
 
     .btn-primary {
@@ -1115,11 +1118,11 @@
       <input type="range" id="durationSlider" min="1" max="12" step="1" value="3"
         oninput="onSlider(this.value)" />
       <div class="slider-ticks">
-        <span class="slider-tick">10</span>
-        <span class="slider-tick">30</span>
-        <span class="slider-tick">60</span>
-        <span class="slider-tick">90</span>
-        <span class="slider-tick">120</span>
+        <span class="slider-tick" style="left: 11px">10</span>
+        <span class="slider-tick" style="left: calc((100% - 22px) * 0.18182 + 11px)">30</span>
+        <span class="slider-tick" style="left: calc((100% - 22px) * 0.45455 + 11px)">60</span>
+        <span class="slider-tick" style="left: calc((100% - 22px) * 0.72727 + 11px)">90</span>
+        <span class="slider-tick" style="left: calc(100% - 11px)">120</span>
       </div>
     </div>
 
@@ -1354,7 +1357,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260805_2046';
+const VERSION = '20260812_2125';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
