@@ -1165,12 +1165,12 @@
       <div class="stat-card-sub" id="statSessionsSub">this week</div>
     </div>
     <div class="stat-card">
-      <div class="stat-card-lbl">DAILY AVG</div>
+      <div class="stat-card-lbl" id="statAvgLbl">DAILY AVG</div>
       <div class="stat-card-val" id="statAvg">0h</div>
-      <div class="stat-card-sub">per active day</div>
+      <div class="stat-card-sub" id="statAvgSub">per active day</div>
     </div>
     <div class="stat-card">
-      <div class="stat-card-lbl">BEST DAY</div>
+      <div class="stat-card-lbl" id="statBestLbl">BEST DAY</div>
       <div class="stat-card-val" id="statBest">0h</div>
       <div class="stat-card-sub" id="statBestDay">—</div>
     </div>
@@ -1357,7 +1357,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260812_2125';
+const VERSION = '20260814_2350';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -1823,9 +1823,12 @@ function getFilteredData(period) {
       days.push({ date: d, seconds: 0 });
     }
   } else if (period === 'month') {
-    const daysInMonth = new Date(navMonth.getFullYear(), navMonth.getMonth() + 1, 0).getDate();
-    for (let i = 1; i <= daysInMonth; i++) {
-      days.push({ date: new Date(navMonth.getFullYear(), navMonth.getMonth(), i), seconds: 0 });
+    // Bucket by week (not day) — a month has too many days to label legibly.
+    const monthEnd = new Date(navMonth.getFullYear(), navMonth.getMonth() + 1, 0);
+    let ws = getWeekStartOf(new Date(navMonth.getFullYear(), navMonth.getMonth(), 1));
+    while (ws <= monthEnd) {
+      days.push({ date: new Date(ws), seconds: 0 });
+      ws = new Date(ws); ws.setDate(ws.getDate() + 7);
     }
   } else if (period === 'year') {
     for (let i = 0; i < 12; i++) {
@@ -1854,6 +1857,12 @@ function getFilteredData(period) {
     filtered.forEach(s => {
       const d = new Date(s.date);
       const bucket = days.find(x => x.date.getMonth() === d.getMonth());
+      if (bucket) bucket.seconds += s.duration;
+    });
+  } else if (period === 'month') {
+    filtered.forEach(s => {
+      const ws = getWeekStartOf(new Date(s.date));
+      const bucket = days.find(x => x.date.getTime() === ws.getTime());
       if (bucket) bucket.seconds += s.duration;
     });
   } else if (period !== 'all') {
@@ -1885,25 +1894,42 @@ function renderStats(filtered, period) {
   document.getElementById('statTotalSub').textContent = labels[period];
   document.getElementById('statSessionsSub').textContent = labels[period];
 
-  // Active days
-  const activeDays = new Set(filtered.map(s => new Date(s.date).toDateString())).size;
-  const avgSec = activeDays ? totalSec / activeDays : 0;
-  document.getElementById('statAvg').textContent = `${Math.round(avgSec / 60)}m`;
+  if (period === 'day') {
+    // Daily avg / best day don't mean anything over a single day — show session-level
+    // stats instead: how long a typical sitting ran, and the longest one.
+    const avgSessionSec = filtered.length ? totalSec / filtered.length : 0;
+    document.getElementById('statAvgLbl').textContent = 'AVG SESSION';
+    document.getElementById('statAvg').textContent = `${Math.round(avgSessionSec / 60)}m`;
+    document.getElementById('statAvgSub').textContent = 'per session';
 
-  // Best day
-  const dayMap = {};
-  filtered.forEach(s => {
-    const k = new Date(s.date).toDateString();
-    dayMap[k] = (dayMap[k] || 0) + s.duration;
-  });
-  let bestDay = '—'; let bestSec = 0;
-  Object.entries(dayMap).forEach(([d, sec]) => {
-    if (sec > bestSec) { bestSec = sec; bestDay = d; }
-  });
-  document.getElementById('statBest').textContent = `${Math.round(bestSec / 60)}m`;
-  document.getElementById('statBestDay').textContent = bestDay !== '—'
-    ? new Date(bestDay).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
-    : '—';
+    const longestSec = filtered.reduce((a, s) => Math.max(a, s.duration), 0);
+    document.getElementById('statBestLbl').textContent = 'LONGEST';
+    document.getElementById('statBest').textContent = `${Math.round(longestSec / 60)}m`;
+    document.getElementById('statBestDay').textContent = filtered.length ? 'in one sitting' : '—';
+  } else {
+    // Active days
+    const activeDays = new Set(filtered.map(s => new Date(s.date).toDateString())).size;
+    const avgSec = activeDays ? totalSec / activeDays : 0;
+    document.getElementById('statAvgLbl').textContent = 'DAILY AVG';
+    document.getElementById('statAvg').textContent = `${Math.round(avgSec / 60)}m`;
+    document.getElementById('statAvgSub').textContent = 'per active day';
+
+    // Best day
+    const dayMap = {};
+    filtered.forEach(s => {
+      const k = new Date(s.date).toDateString();
+      dayMap[k] = (dayMap[k] || 0) + s.duration;
+    });
+    let bestDay = '—'; let bestSec = 0;
+    Object.entries(dayMap).forEach(([d, sec]) => {
+      if (sec > bestSec) { bestSec = sec; bestDay = d; }
+    });
+    document.getElementById('statBestLbl').textContent = 'BEST DAY';
+    document.getElementById('statBest').textContent = `${Math.round(bestSec / 60)}m`;
+    document.getElementById('statBestDay').textContent = bestDay !== '—'
+      ? new Date(bestDay).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+      : '—';
+  }
 }
 
 function niceCeil(mins) {
@@ -1942,7 +1968,7 @@ function renderBarChart(days, period) {
   const titles = {
     day: isNavToday ? 'HOURLY FOCUS — TODAY' : `HOURLY FOCUS — ${navDay.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).toUpperCase()}`,
     week: `DAILY FOCUS — ${fmtShort(navWeekStart)} – ${fmtShort(navWeekEnd)}`,
-    month: `DAILY FOCUS — ${monthName}`,
+    month: `WEEKLY FOCUS — ${monthName}`,
     year: `MONTHLY FOCUS — ${navYear}`,
     all: 'WEEKLY FOCUS — ALL TIME'
   };
@@ -1964,8 +1990,10 @@ function renderBarChart(days, period) {
     chart.appendChild(line);
   });
 
-  // Label density by period
-  const showEvery = period === 'month' ? 5 : period === 'day' ? 3 : 1;
+  // Label density by period — dense periods (day: 24 bars, year: 12 bars) only label every
+  // Nth bar; the bar-lbl CSS relies on that spare room to let text spill past its own column
+  // without colliding with a neighbour's label.
+  const showEvery = period === 'day' ? 3 : period === 'year' ? 2 : 1;
 
   days.forEach((d, i) => {
     // Bar column
@@ -1976,11 +2004,14 @@ function renderBarChart(days, period) {
     const bar = document.createElement('div');
     bar.className = 'bar';
     if (d.seconds > 0) bar.classList.add('has-data');
+    const weekEnd = period === 'month' ? new Date(d.date.getTime() + 7 * 86400000) : null;
     const isToday = period === 'day'
       ? (d.date.getHours() === now.getHours() && navDay.toDateString() === todayStr)
       : period === 'year'
         ? d.date.getMonth() === now.getMonth() && d.date.getFullYear() === now.getFullYear()
-        : d.date.toDateString() === todayStr;
+        : period === 'month'
+          ? now >= d.date && now < weekEnd
+          : d.date.toDateString() === todayStr;
     if (isToday) bar.classList.add('today');
 
     col.appendChild(bar);
@@ -1993,9 +2024,9 @@ function renderBarChart(days, period) {
     } else if (period === 'week') {
       lbl = d.date.toLocaleDateString('en-US', { weekday: 'narrow' });
     } else if (period === 'month') {
-      lbl = (i % showEvery === 0) ? d.date.getDate().toString() : '';
+      lbl = d.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     } else if (period === 'year') {
-      lbl = d.date.toLocaleDateString('en-US', { month: 'narrow' });
+      lbl = (i % showEvery === 0) ? d.date.toLocaleDateString('en-US', { month: 'short' }) : '';
     } else {
       lbl = d.date.toLocaleDateString('en-US', { month: 'narrow', day: 'numeric' });
     }
@@ -2144,15 +2175,19 @@ function undim() {
   document.body.classList.remove('dimmed');
 }
 
-// Tap anywhere to undim and reset the dim timer
-document.addEventListener('click', () => {
+// Tap anywhere to undim and reset the dim timer. Captured at the document level, ahead of any
+// button's own click handler, so a wake-up tap on a near-black screen can never also land on
+// whatever control happens to be underneath the finger (e.g. accidentally hitting STOP).
+document.addEventListener('click', (e) => {
   if (document.body.classList.contains('dimmed')) {
+    e.stopPropagation();
+    e.preventDefault();
     undim();
     if (timerState === 'running') scheduleDim();
   } else if (timerState === 'running') {
     scheduleDim();
   }
-});
+}, true);
 
 // Re-acquire if user switches tabs and comes back
 document.addEventListener('visibilitychange', () => {
