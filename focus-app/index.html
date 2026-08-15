@@ -599,6 +599,33 @@
       pointer-events: none;
     }
 
+    .bar-tooltip {
+      position: absolute;
+      transform: translateX(-50%);
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      padding: 3px 7px;
+      border-radius: 6px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.12s ease;
+      z-index: 2;
+    }
+
+    .bar-tooltip.show { opacity: 1; }
+
+    /* Value doesn't fit above a near-full-height bar — sit inside it instead, near the top. */
+    .bar-tooltip.inside {
+      background: transparent;
+      border: none;
+      color: var(--bg);
+    }
+
     /* Sessions list */
 
     .empty-state {
@@ -1357,7 +1384,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260814_2350';
+const VERSION = '20260814_2353';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -1713,6 +1740,7 @@ let navDay = new Date();
 let navMonth = new Date();
 let navYear = new Date().getFullYear();
 let navWeekStart = getWeekStartOf(new Date());
+let activeTooltipBar = null;
 
 function getWeekStartOf(date) {
   const d = new Date(date);
@@ -1995,6 +2023,33 @@ function renderBarChart(days, period) {
   // without colliding with a neighbour's label.
   const showEvery = period === 'day' ? 3 : period === 'year' ? 2 : 1;
 
+  // Tap a bar to see its exact value. One shared tooltip, repositioned per click; it sits above
+  // the bar normally, but a near-full-height bar leaves no room above it, so the tooltip drops
+  // inside the bar itself (near its top) instead of overflowing the chart.
+  const tooltip = document.createElement('div');
+  tooltip.className = 'bar-tooltip';
+  activeTooltipBar = null;
+
+  function placeTooltip(bar, seconds) {
+    if (activeTooltipBar === bar) {
+      tooltip.classList.remove('show');
+      activeTooltipBar = null;
+      return;
+    }
+    activeTooltipBar = bar;
+    const chartRect = chart.getBoundingClientRect();
+    const barRect = bar.getBoundingClientRect();
+    const centerX = barRect.left + barRect.width / 2 - chartRect.left;
+    const barTop = barRect.top - chartRect.top;
+    const TOOLTIP_SPACE = 20; // room a pill above the bar needs, incl. gap
+    const inside = barTop < TOOLTIP_SPACE;
+    tooltip.classList.toggle('inside', inside);
+    tooltip.style.left = centerX + 'px';
+    tooltip.style.top = (inside ? barTop + 6 : barTop - TOOLTIP_SPACE) + 'px';
+    tooltip.textContent = fmtDuration(seconds);
+    tooltip.classList.add('show');
+  }
+
   days.forEach((d, i) => {
     // Bar column
     const col = document.createElement('div');
@@ -2013,6 +2068,11 @@ function renderBarChart(days, period) {
           ? now >= d.date && now < weekEnd
           : d.date.toDateString() === todayStr;
     if (isToday) bar.classList.add('today');
+
+    col.addEventListener('click', (e) => {
+      e.stopPropagation();
+      placeTooltip(bar, d.seconds);
+    });
 
     col.appendChild(bar);
     chart.appendChild(col);
@@ -2040,8 +2100,25 @@ function renderBarChart(days, period) {
       bar.style.height = (pct * 100) + '%';
     });
   });
+
+  chart.appendChild(tooltip);
 }
 
+function fmtDuration(sec) {
+  const mins = Math.round(sec / 60);
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
+// Tap anywhere outside a bar to dismiss its tooltip
+document.addEventListener('click', () => {
+  if (!activeTooltipBar) return;
+  const shown = document.querySelector('.bar-tooltip.show');
+  if (shown) shown.classList.remove('show');
+  activeTooltipBar = null;
+});
 
 // ── AUDIO ──
 let audioCtx = null;
