@@ -619,11 +619,12 @@
 
     .bar-tooltip.show { opacity: 1; }
 
-    /* Value doesn't fit above a near-full-height bar — sit inside it instead, near the top. */
+    /* Value doesn't fit above a near-full-height bar — sit inside it instead, near the top.
+       Keep the same opaque pill (rather than a transparent, bar-colored fill): the tooltip is
+       usually wider than the bar itself, so a transparent style would fade into the surrounding
+       (differently-colored) chart background wherever it overhangs the bar's edges. */
     .bar-tooltip.inside {
-      background: transparent;
-      border: none;
-      color: var(--bg);
+      box-shadow: 0 1px 4px rgba(0,0,0,0.4);
     }
 
     /* Sessions list */
@@ -1384,7 +1385,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260814_2353';
+const VERSION = '20260814_2356';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
