@@ -1385,7 +1385,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260814_2356';
+const VERSION = '20260815_0001';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -2047,7 +2047,7 @@ function renderBarChart(days, period) {
     tooltip.classList.toggle('inside', inside);
     tooltip.style.left = centerX + 'px';
     tooltip.style.top = (inside ? barTop + 6 : barTop - TOOLTIP_SPACE) + 'px';
-    tooltip.textContent = fmtDuration(seconds);
+    tooltip.textContent = `${Math.round(seconds / 60)}m`; // match the Y-axis's plain-minutes format
     tooltip.classList.add('show');
   }
 
@@ -2103,14 +2103,6 @@ function renderBarChart(days, period) {
   });
 
   chart.appendChild(tooltip);
-}
-
-function fmtDuration(sec) {
-  const mins = Math.round(sec / 60);
-  if (mins < 60) return `${mins}m`;
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  return m ? `${h}h ${m}m` : `${h}h`;
 }
 
 // Tap anywhere outside a bar to dismiss its tooltip
