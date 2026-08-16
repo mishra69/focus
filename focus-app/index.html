@@ -569,7 +569,6 @@
     }
 
     .bar.has-data { background: var(--accent2); }
-    .bar.today { background: var(--accent); }
 
     .bar-labels-row {
       display: flex;
@@ -1385,7 +1384,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260815_0001';
+const VERSION = '20260815_2337';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -1986,7 +1985,6 @@ function renderBarChart(days, period) {
   const maxSec = Math.max(...days.map(d => d.seconds), 1);
   const maxMins = Math.round(maxSec / 60);
   const niceMax = niceCeil(maxMins);
-  const todayStr = new Date().toDateString();
   const now = new Date();
 
   // Chart title
@@ -2060,15 +2058,6 @@ function renderBarChart(days, period) {
     const bar = document.createElement('div');
     bar.className = 'bar';
     if (d.seconds > 0) bar.classList.add('has-data');
-    const weekEnd = period === 'month' ? new Date(d.date.getTime() + 7 * 86400000) : null;
-    const isToday = period === 'day'
-      ? (d.date.getHours() === now.getHours() && navDay.toDateString() === todayStr)
-      : period === 'year'
-        ? d.date.getMonth() === now.getMonth() && d.date.getFullYear() === now.getFullYear()
-        : period === 'month'
-          ? now >= d.date && now < weekEnd
-          : d.date.toDateString() === todayStr;
-    if (isToday) bar.classList.add('today');
 
     col.addEventListener('click', (e) => {
       e.stopPropagation();
