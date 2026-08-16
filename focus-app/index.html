@@ -1384,7 +1384,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260815_2337';
+const VERSION = '20260815_2343';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -1912,8 +1912,10 @@ function renderStats(filtered, period) {
   document.getElementById('statTotal').textContent = `${Math.round(totalSec / 60)}m`;
   document.getElementById('statSessions').textContent = filtered.length;
 
+  // Day view already shows its date in the period-nav header right above these cards —
+  // repeating it here would be the third time the same date shows up on screen.
   const labels = {
-    day: navDay.toDateString() === new Date().toDateString() ? 'today' : navDay.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).toLowerCase(),
+    day: '',
     week: 'this week',
     month: navMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }).toLowerCase(),
     year: navYear.toString(),
