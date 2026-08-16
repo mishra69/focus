@@ -1170,7 +1170,6 @@
       <button class="period-btn active" onclick="setPeriod('week')">WEEK</button>
       <button class="period-btn" onclick="setPeriod('month')">MONTH</button>
       <button class="period-btn" onclick="setPeriod('year')">YEAR</button>
-      <button class="period-btn" onclick="setPeriod('all')">ALL</button>
     </div>
   </div>
 
@@ -1384,7 +1383,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260815_2343';
+const VERSION = '20260816_1613';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -1829,8 +1828,6 @@ function getFilteredData(period) {
   } else if (period === 'year') {
     start = new Date(navYear, 0, 1);
     end = new Date(navYear, 11, 31, 23, 59, 59);
-  } else {
-    start = new Date(0); end = new Date();
   }
 
   const filtered = sessions.filter(s => {
@@ -1862,16 +1859,6 @@ function getFilteredData(period) {
     for (let i = 0; i < 12; i++) {
       days.push({ date: new Date(navYear, i, 1), seconds: 0 });
     }
-  } else {
-    // All-time: group by week
-    const map = {};
-    sessions.forEach(s => {
-      const d = new Date(s.date);
-      const week = getWeekStart(d).toISOString();
-      if (!map[week]) map[week] = { date: getWeekStart(d), seconds: 0 };
-      map[week].seconds += s.duration;
-    });
-    Object.values(map).sort((a,b) => a.date - b.date).forEach(w => days.push(w));
   }
 
   // Fill buckets
@@ -1893,7 +1880,7 @@ function getFilteredData(period) {
       const bucket = days.find(x => x.date.getTime() === ws.getTime());
       if (bucket) bucket.seconds += s.duration;
     });
-  } else if (period !== 'all') {
+  } else {
     filtered.forEach(s => {
       const d = new Date(s.date); d.setHours(0,0,0,0);
       const day = days.find(x => x.date.getTime() === d.getTime());
@@ -1903,8 +1890,6 @@ function getFilteredData(period) {
 
   return { filtered, days };
 }
-
-function getWeekStart(date) { return getWeekStartOf(date); }
 
 function renderStats(filtered, period) {
   const totalSec = filtered.reduce((a,s) => a + s.duration, 0);
@@ -1918,8 +1903,7 @@ function renderStats(filtered, period) {
     day: '',
     week: 'this week',
     month: navMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }).toLowerCase(),
-    year: navYear.toString(),
-    all: 'all time'
+    year: navYear.toString()
   };
   document.getElementById('statTotalSub').textContent = labels[period];
   document.getElementById('statSessionsSub').textContent = labels[period];
@@ -1998,8 +1982,7 @@ function renderBarChart(days, period) {
     day: isNavToday ? 'HOURLY FOCUS — TODAY' : `HOURLY FOCUS — ${navDay.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).toUpperCase()}`,
     week: `DAILY FOCUS — ${fmtShort(navWeekStart)} – ${fmtShort(navWeekEnd)}`,
     month: `WEEKLY FOCUS — ${monthName}`,
-    year: `MONTHLY FOCUS — ${navYear}`,
-    all: 'WEEKLY FOCUS — ALL TIME'
+    year: `MONTHLY FOCUS — ${navYear}`
   };
   document.getElementById('chartTitle').textContent = titles[period];
 
@@ -2077,10 +2060,8 @@ function renderBarChart(days, period) {
       lbl = d.date.toLocaleDateString('en-US', { weekday: 'narrow' });
     } else if (period === 'month') {
       lbl = d.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    } else if (period === 'year') {
-      lbl = (i % showEvery === 0) ? d.date.toLocaleDateString('en-US', { month: 'short' }) : '';
     } else {
-      lbl = d.date.toLocaleDateString('en-US', { month: 'narrow', day: 'numeric' });
+      lbl = (i % showEvery === 0) ? d.date.toLocaleDateString('en-US', { month: 'short' }) : '';
     }
     const lblEl = document.createElement('div');
     lblEl.className = 'bar-lbl';
