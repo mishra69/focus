@@ -1133,24 +1133,25 @@
     <div class="modal-body">
       iOS won't let a web app draw on the Lock Screen, so focus drives Apple's <strong>Clock</strong>
       instead — countdowns use the Timer, count-ups use the Stopwatch. Both tick on the always-on
-      display and survive locking. This needs two one-time Shortcuts, created on this iPhone.
+      display and survive locking. Two one-time Shortcuts, same shape: clear, then start only if
+      there's an input. START sends a value, STOP sends none.
     </div>
 
     <div class="install-steps">
       <div class="install-step">
         <div class="install-step-num">1</div>
         <div class="install-step-text">
-          Shortcut named exactly <strong>Focus Timer</strong>
-          <span>Cancel Timer → Stop Stopwatch → Reset Stopwatch → If Shortcut Input has any
-            value, Start Timer for Shortcut Input minutes</span>
+          <strong>Focus Timer</strong> — countdown start &amp; stop
+          <span>Cancel the current Timer → If Shortcut Input has any value, Start a Timer for
+            Shortcut Input minutes</span>
         </div>
       </div>
       <div class="install-step">
         <div class="install-step-num">2</div>
         <div class="install-step-text">
-          Shortcut named exactly <strong>Focus Stopwatch</strong>
-          <span>Cancel Timer → Stop Stopwatch → Reset Stopwatch → Start Stopwatch. No input,
-            no If</span>
+          <strong>Focus Stopwatch</strong> — count-up start &amp; stop
+          <span>Stop the Stopwatch → Reset Stopwatch → If Shortcut Input has any value,
+            Start Stopwatch</span>
         </div>
       </div>
       <div class="install-step">
@@ -1489,7 +1490,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260902_2327';
+const VERSION = '20260903_0009';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -1516,11 +1517,13 @@ function updateSliderVisibility() {
 // can't be pinned or survive an unlock. So we drive Apple's own Clock timer instead: its Live
 // Activity ticks on the always-on display, sits above notifications, and costs zero pushes.
 //
-// Two user-created shortcuts, split so neither needs a nested or compound condition:
-//   "Focus Timer"     — clears Timer+Stopwatch, then starts a Timer for `Shortcut Input` minutes
-//                       (guarded by `If Shortcut Input has any value`). No input = clear only,
-//                       which is what STOP sends, for either mode.
-//   "Focus Stopwatch" — clears both, then starts the Stopwatch. Takes no input, needs no If.
+// One shortcut per mode, each owning both halves of its own lifecycle. Both have the same shape:
+// an unconditional "clear" prefix, then a start guarded by `If Shortcut Input has any value`.
+// So input present = start, input absent = stop, and neither needs a nested or compound condition.
+//
+//   "Focus Timer"      Cancel the current Timer  │  If input → Start a Timer for input minutes
+//   "Focus Stopwatch"  Stop + Reset Stopwatch    │  If input → Start Stopwatch
+//
 // Countdown drives the Timer (counts down to the session end); count-up drives the Stopwatch,
 // which shows true elapsed time. Sync is strictly one-way, app → Clock: the Clock can't report
 // back, so if the user pauses or resets from the Lock Screen we won't know.
@@ -1529,29 +1532,33 @@ const STOPWATCH_SHORTCUT_NAME = 'Focus Stopwatch';
 
 function lockScreenEnabled() { return localStorage.getItem('focus_lockscreen') === '1'; }
 
-function runShortcutUrl(name) {
-  return `shortcuts://run-shortcut?name=${encodeURIComponent(name)}`;
+// No input at all is the stop signal. Note this must be a genuinely absent parameter, not 0 or
+// "": the shortcut's guard is `has any value`, and "0" *has* a value — it would pass the guard
+// and start a zero-length timer that fires the instant it begins.
+function runShortcutUrl(name, value) {
+  const base = `shortcuts://run-shortcut?name=${encodeURIComponent(name)}`;
+  return value === undefined ? base : `${base}&input=text&text=${value}`;
 }
 
-// mins > 0 starts a countdown of that length; 0 clears the Timer and Stopwatch and starts nothing.
-//
-// The clear form omits the input parameters entirely rather than passing 0, because the shortcut
-// gates Start Timer behind `If Shortcut Input has any value` — and "0" *has* a value, so it would
-// pass the guard and start a zero-minute timer that fires the instant it begins.
-function shortcutUrl(mins) {
-  const base = runShortcutUrl(SHORTCUT_NAME);
-  return mins > 0 ? `${base}&input=text&text=${mins}` : base;
-}
+// Countdown start/resync/test: the value carries the duration in minutes.
+function shortcutUrl(mins) { return runShortcutUrl(SHORTCUT_NAME, mins); }
 
 // iOS only follows a shortcuts:// jump from a real <a> tap (assigning location.href is unreliable
 // in standalone mode), so the controls that drive the Clock are anchors, not buttons.
 function shortcutUsable() { return lockScreenEnabled(); }
 
-// What START should fire, per mode.
+// The Stopwatch takes no duration, so any non-empty value works — it exists purely to trip the
+// `has any value` guard and distinguish start from stop.
 function startShortcutUrl() {
   return timerMode === 'countup'
-    ? runShortcutUrl(STOPWATCH_SHORTCUT_NAME)
+    ? runShortcutUrl(STOPWATCH_SHORTCUT_NAME, 'go')
     : shortcutUrl(selectedDuration);
+}
+
+// STOP routes back to whichever shortcut owns the running mode, with no input.
+function stopShortcutUrl() {
+  return runShortcutUrl(
+    timerMode === 'countup' ? STOPWATCH_SHORTCUT_NAME : SHORTCUT_NAME);
 }
 
 // The hrefs are kept permanently populated and simply follow app state. The one thing that must
@@ -1560,9 +1567,9 @@ function startShortcutUrl() {
 // shouldn't fire the Clock are cancelled with preventDefault() instead.
 function updateShortcutLinks() {
   document.getElementById('mainBtn').href = startShortcutUrl();
-  // Stopping early must clear the Clock too, or the Timer alarms at the original end time
-  // (and a Stopwatch would keep counting). No input = clear both, whichever mode we're in.
-  document.getElementById('stopBtn').href = shortcutUrl(0);
+  // Stopping early must clear the Clock too, or the Timer alarms at the original end time and a
+  // Stopwatch just keeps counting.
+  document.getElementById('stopBtn').href = stopShortcutUrl();
   document.getElementById('lockScreenTestBtn').href = shortcutUrl(1);
   refreshResyncLink();
 
