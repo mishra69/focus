@@ -1488,7 +1488,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260902_2230';
+const VERSION = '20260902_2302';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -1536,34 +1536,49 @@ function shortcutUrl(mins) {
 
 // iOS only follows a shortcuts:// jump from a real <a> tap (assigning location.href is unreliable
 // in standalone mode), so the controls that drive the Clock are anchors, not buttons.
-// Count-up has no end time, so there's nothing for the Clock to count down to.
-function shortcutUsable() { return lockScreenEnabled() && timerMode === 'countdown'; }
+function shortcutUsable() { return lockScreenEnabled(); }
+
+// Count-up has no end time, so there's nothing to count down to — instead we borrow the
+// server's check-in cadence (worker.js CHECKIN_FLOOR_MS) and arm a Clock timer for that first
+// block. It gives the session Lock Screen presence and its alarm lands where the first
+// "still focusing?" check-in would. Past this block the Clock goes quiet: re-arming needs a
+// foreground tap (RESYNC), since a shortcuts:// jump can't fire from a timer or the background.
+const COUNTUP_BLOCK_MINS = 60;
+
+// Minutes the Clock should be armed for if a session were started/re-armed right now.
+function shortcutBlockMins() {
+  if (timerMode === 'countup') return COUNTUP_BLOCK_MINS;
+  return timerState === 'running'
+    ? Math.max(1, Math.ceil(remainingSeconds / 60)) // mid-session: what's actually left
+    : selectedDuration;
+}
 
 // The hrefs are kept permanently populated and simply follow app state. The one thing that must
 // never happen is *removing* an href during its own tap: a click handler runs before the browser
 // reads href, so a handler that stripped it would silently cancel its own jump. Taps that
 // shouldn't fire the Clock are cancelled with preventDefault() instead.
 function updateShortcutLinks() {
-  document.getElementById('mainBtn').href = shortcutUrl(selectedDuration);
+  document.getElementById('mainBtn').href =
+    shortcutUrl(timerMode === 'countup' ? COUNTUP_BLOCK_MINS : selectedDuration);
   // Stopping early must cancel the Clock timer too, or it alarms at the original end time.
   document.getElementById('stopBtn').href = shortcutUrl(0);
   document.getElementById('lockScreenTestBtn').href = shortcutUrl(1);
   refreshResyncLink();
 
   const on = lockScreenEnabled();
-  const resync = document.getElementById('resyncBtn');
-  resync.style.display = (shortcutUsable() && timerState === 'running') ? '' : 'none';
+  document.getElementById('resyncBtn').style.display =
+    (on && timerState === 'running') ? '' : 'none';
   const test = document.getElementById('lockScreenTestBtn');
   test.style.opacity = on ? '1' : '0.4';
   test.style.pointerEvents = on ? 'auto' : 'none';
 }
 
 // Nothing can read the Clock's state back, so a Lock Screen pause/cancel is invisible to us.
-// RESYNC is the manual repair: rebuild the Clock timer from our own remaining time. Alone among
-// these links its value moves continuously, so it's refreshed each tick.
+// RESYNC is the manual repair: for a countdown it rebuilds the timer from our own remaining
+// time; for a count-up it arms the next block. Alone among these links its value moves
+// continuously, so it's refreshed each tick.
 function refreshResyncLink() {
-  document.getElementById('resyncBtn').href =
-    shortcutUrl(Math.max(1, Math.ceil(remainingSeconds / 60)));
+  document.getElementById('resyncBtn').href = shortcutUrl(shortcutBlockMins());
 }
 
 // Cancel a tap that shouldn't reach the Clock. Returns true if the jump was blocked.
