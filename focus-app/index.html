@@ -1131,32 +1131,33 @@
     </div>
 
     <div class="modal-body">
-      iOS won't let a web app draw on the Lock Screen, so focus can drive Apple's
-      <strong>Clock</strong> timer instead — it ticks on the always-on display and survives
-      locking. This needs a one-time Shortcut, created by you on this iPhone.
+      iOS won't let a web app draw on the Lock Screen, so focus drives Apple's <strong>Clock</strong>
+      instead — countdowns use the Timer, count-ups use the Stopwatch. Both tick on the always-on
+      display and survive locking. This needs two one-time Shortcuts, created on this iPhone.
     </div>
 
     <div class="install-steps">
       <div class="install-step">
         <div class="install-step-num">1</div>
         <div class="install-step-text">
-          Open Shortcuts → new shortcut, named exactly <strong>Focus Timer</strong>
-          <span>The name must match or focus can't call it</span>
+          Shortcut named exactly <strong>Focus Timer</strong>
+          <span>Cancel Timer → Stop Stopwatch → Reset Stopwatch → If Shortcut Input has any
+            value, Start Timer for Shortcut Input minutes</span>
         </div>
       </div>
       <div class="install-step">
         <div class="install-step-num">2</div>
         <div class="install-step-text">
-          Add <strong>Cancel Timer</strong>, then <strong>Start Timer</strong> for
-          <strong>Shortcut Input</strong> minutes
-          <span>Cancel first so only one timer is ever alive</span>
+          Shortcut named exactly <strong>Focus Stopwatch</strong>
+          <span>Cancel Timer → Stop Stopwatch → Reset Stopwatch → Start Stopwatch. No input,
+            no If</span>
         </div>
       </div>
       <div class="install-step">
         <div class="install-step-num">3</div>
         <div class="install-step-text">
-          In shortcut settings, turn <strong>Show When Run</strong> OFF
-          <span>So it runs as a banner and returns you to focus</span>
+          Turn <strong>Show When Run</strong> OFF on both
+          <span>So they run as a banner and return you to focus</span>
         </div>
       </div>
     </div>
@@ -1164,7 +1165,7 @@
     <label class="ls-toggle-row">
       <span>
         Use Lock Screen timer
-        <span class="ls-toggle-sub">Countdown sessions only</span>
+        <span class="ls-toggle-sub">Timer for countdown, Stopwatch for count-up</span>
       </span>
       <input type="checkbox" id="lockScreenToggle" onchange="setLockScreenEnabled(this.checked)" />
     </label>
@@ -1488,7 +1489,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260902_2302';
+const VERSION = '20260902_2327';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -1515,22 +1516,30 @@ function updateSliderVisibility() {
 // can't be pinned or survive an unlock. So we drive Apple's own Clock timer instead: its Live
 // Activity ticks on the always-on display, sits above notifications, and costs zero pushes.
 //
-// One user-created shortcut (SHORTCUT_NAME) takes a minutes value and internally does
-// Cancel Timer → Start Timer, so a single tap can never leave two timers alive and "the current
-// timer" that Cancel targets is unambiguous. Sync is strictly one-way, app → Clock: the Clock
-// can't report back, so if the user pauses or cancels from the Lock Screen we won't know.
+// Two user-created shortcuts, split so neither needs a nested or compound condition:
+//   "Focus Timer"     — clears Timer+Stopwatch, then starts a Timer for `Shortcut Input` minutes
+//                       (guarded by `If Shortcut Input has any value`). No input = clear only,
+//                       which is what STOP sends, for either mode.
+//   "Focus Stopwatch" — clears both, then starts the Stopwatch. Takes no input, needs no If.
+// Countdown drives the Timer (counts down to the session end); count-up drives the Stopwatch,
+// which shows true elapsed time. Sync is strictly one-way, app → Clock: the Clock can't report
+// back, so if the user pauses or resets from the Lock Screen we won't know.
 const SHORTCUT_NAME = 'Focus Timer';
+const STOPWATCH_SHORTCUT_NAME = 'Focus Stopwatch';
 
 function lockScreenEnabled() { return localStorage.getItem('focus_lockscreen') === '1'; }
 
-// mins > 0 cancels then starts a fresh timer of that length; 0 cancels only.
+function runShortcutUrl(name) {
+  return `shortcuts://run-shortcut?name=${encodeURIComponent(name)}`;
+}
+
+// mins > 0 starts a countdown of that length; 0 clears the Timer and Stopwatch and starts nothing.
 //
-// The cancel form omits the input parameters entirely rather than passing 0, because the
-// shortcut gates Start Timer behind `If Shortcut Input has any value` — and "0" *has* a value,
-// so it would pass the guard and start a zero-minute timer that fires the instant it begins.
-// No input at all makes the guard false, so the shortcut cancels and starts nothing.
+// The clear form omits the input parameters entirely rather than passing 0, because the shortcut
+// gates Start Timer behind `If Shortcut Input has any value` — and "0" *has* a value, so it would
+// pass the guard and start a zero-minute timer that fires the instant it begins.
 function shortcutUrl(mins) {
-  const base = `shortcuts://run-shortcut?name=${encodeURIComponent(SHORTCUT_NAME)}`;
+  const base = runShortcutUrl(SHORTCUT_NAME);
   return mins > 0 ? `${base}&input=text&text=${mins}` : base;
 }
 
@@ -1538,19 +1547,11 @@ function shortcutUrl(mins) {
 // in standalone mode), so the controls that drive the Clock are anchors, not buttons.
 function shortcutUsable() { return lockScreenEnabled(); }
 
-// Count-up has no end time, so there's nothing to count down to — instead we borrow the
-// server's check-in cadence (worker.js CHECKIN_FLOOR_MS) and arm a Clock timer for that first
-// block. It gives the session Lock Screen presence and its alarm lands where the first
-// "still focusing?" check-in would. Past this block the Clock goes quiet: re-arming needs a
-// foreground tap (RESYNC), since a shortcuts:// jump can't fire from a timer or the background.
-const COUNTUP_BLOCK_MINS = 60;
-
-// Minutes the Clock should be armed for if a session were started/re-armed right now.
-function shortcutBlockMins() {
-  if (timerMode === 'countup') return COUNTUP_BLOCK_MINS;
-  return timerState === 'running'
-    ? Math.max(1, Math.ceil(remainingSeconds / 60)) // mid-session: what's actually left
-    : selectedDuration;
+// What START should fire, per mode.
+function startShortcutUrl() {
+  return timerMode === 'countup'
+    ? runShortcutUrl(STOPWATCH_SHORTCUT_NAME)
+    : shortcutUrl(selectedDuration);
 }
 
 // The hrefs are kept permanently populated and simply follow app state. The one thing that must
@@ -1558,27 +1559,29 @@ function shortcutBlockMins() {
 // reads href, so a handler that stripped it would silently cancel its own jump. Taps that
 // shouldn't fire the Clock are cancelled with preventDefault() instead.
 function updateShortcutLinks() {
-  document.getElementById('mainBtn').href =
-    shortcutUrl(timerMode === 'countup' ? COUNTUP_BLOCK_MINS : selectedDuration);
-  // Stopping early must cancel the Clock timer too, or it alarms at the original end time.
+  document.getElementById('mainBtn').href = startShortcutUrl();
+  // Stopping early must clear the Clock too, or the Timer alarms at the original end time
+  // (and a Stopwatch would keep counting). No input = clear both, whichever mode we're in.
   document.getElementById('stopBtn').href = shortcutUrl(0);
   document.getElementById('lockScreenTestBtn').href = shortcutUrl(1);
   refreshResyncLink();
 
   const on = lockScreenEnabled();
+  // Count-up needs no RESYNC: the Stopwatch runs indefinitely, so there's nothing to re-arm,
+  // and restarting it would reset elapsed to zero and *lose* the session's real progress.
   document.getElementById('resyncBtn').style.display =
-    (on && timerState === 'running') ? '' : 'none';
+    (on && timerState === 'running' && timerMode === 'countdown') ? '' : 'none';
   const test = document.getElementById('lockScreenTestBtn');
   test.style.opacity = on ? '1' : '0.4';
   test.style.pointerEvents = on ? 'auto' : 'none';
 }
 
 // Nothing can read the Clock's state back, so a Lock Screen pause/cancel is invisible to us.
-// RESYNC is the manual repair: for a countdown it rebuilds the timer from our own remaining
-// time; for a count-up it arms the next block. Alone among these links its value moves
-// continuously, so it's refreshed each tick.
+// RESYNC is the manual repair for a countdown: rebuild the Timer from our own remaining time.
+// Alone among these links its value moves continuously, so it's refreshed each tick.
 function refreshResyncLink() {
-  document.getElementById('resyncBtn').href = shortcutUrl(shortcutBlockMins());
+  document.getElementById('resyncBtn').href =
+    shortcutUrl(Math.max(1, Math.ceil(remainingSeconds / 60)));
 }
 
 // Cancel a tap that shouldn't reach the Clock. Returns true if the jump was blocked.
