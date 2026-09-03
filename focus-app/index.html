@@ -1490,7 +1490,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260903_0009';
+const VERSION = '20260903_0024';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -1535,9 +1535,19 @@ function lockScreenEnabled() { return localStorage.getItem('focus_lockscreen') =
 // No input at all is the stop signal. Note this must be a genuinely absent parameter, not 0 or
 // "": the shortcut's guard is `has any value`, and "0" *has* a value — it would pass the guard
 // and start a zero-length timer that fires the instant it begins.
+//
+// EXPERIMENT: uses the x-callback-url form so Shortcuts hands control back when it finishes,
+// instead of leaving the user parked in the Shortcuts app. `shortcuts://` always brings Shortcuts
+// to the front — that's the scheme's design, not a setting we can switch off — so the goal is a
+// brief flash-through rather than no visit at all. If x-success lands in Safari instead of the
+// installed PWA, drop the x-success param and the '/x-callback-url' path segment to revert.
+//
+// Built by hand rather than with URLSearchParams because that encodes spaces as '+', and the
+// shortcut name has to arrive as "Focus%20Timer" for Shortcuts to match it.
 function runShortcutUrl(name, value) {
-  const base = `shortcuts://run-shortcut?name=${encodeURIComponent(name)}`;
-  return value === undefined ? base : `${base}&input=text&text=${value}`;
+  let url = `shortcuts://x-callback-url/run-shortcut?name=${encodeURIComponent(name)}`;
+  if (value !== undefined) url += `&input=text&text=${encodeURIComponent(value)}`;
+  return `${url}&x-success=${encodeURIComponent(location.origin + '/')}`;
 }
 
 // Countdown start/resync/test: the value carries the duration in minutes.
