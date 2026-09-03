@@ -1488,7 +1488,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260902_2216';
+const VERSION = '20260902_2230';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -1523,9 +1523,15 @@ const SHORTCUT_NAME = 'Focus Timer';
 
 function lockScreenEnabled() { return localStorage.getItem('focus_lockscreen') === '1'; }
 
-// text=0 cancels only; a positive value cancels then starts a fresh timer of that many minutes.
+// mins > 0 cancels then starts a fresh timer of that length; 0 cancels only.
+//
+// The cancel form omits the input parameters entirely rather than passing 0, because the
+// shortcut gates Start Timer behind `If Shortcut Input has any value` — and "0" *has* a value,
+// so it would pass the guard and start a zero-minute timer that fires the instant it begins.
+// No input at all makes the guard false, so the shortcut cancels and starts nothing.
 function shortcutUrl(mins) {
-  return `shortcuts://run-shortcut?name=${encodeURIComponent(SHORTCUT_NAME)}&input=text&text=${mins}`;
+  const base = `shortcuts://run-shortcut?name=${encodeURIComponent(SHORTCUT_NAME)}`;
+  return mins > 0 ? `${base}&input=text&text=${mins}` : base;
 }
 
 // iOS only follows a shortcuts:// jump from a real <a> tap (assigning location.href is unreliable
