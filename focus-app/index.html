@@ -326,6 +326,8 @@
       white-space: nowrap;
     }
 
+    /* Rendered as an <a> so a tap can follow a shortcuts:// href (iOS ignores those from
+       scripted navigation) — hence the explicit centering/decoration a <button> gave for free. */
     .btn-primary {
       width: 100%;
       max-width: 280px;
@@ -342,6 +344,12 @@
       transition: all 0.2s;
       position: relative;
       overflow: hidden;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+      -webkit-tap-highlight-color: transparent;
     }
 
     .btn-primary:active { transform: scale(0.97); }
@@ -363,6 +371,10 @@
       cursor: pointer;
       transition: all 0.2s;
       letter-spacing: 0.5px;
+      box-sizing: border-box;
+      text-align: center;
+      text-decoration: none;
+      -webkit-tap-highlight-color: transparent;
     }
 
     .btn-secondary:hover { border-color: var(--muted); color: var(--text); }
@@ -913,6 +925,40 @@
       display: block;
     }
 
+    /* Lock Screen timer setup sheet — same bottom-sheet chrome as the install sheet */
+    #lockscreen-sheet {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 250;
+      align-items: flex-end;
+      justify-content: center;
+    }
+    #lockscreen-sheet.visible { display: flex; }
+
+    .ls-toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 14px 16px;
+      font-size: 13px;
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .ls-toggle-sub {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    .ls-toggle-row input { width: 44px; height: 26px; flex-shrink: 0; }
+
     /* Sign-in screen */
     #signin-screen {
       display: none;
@@ -1072,6 +1118,61 @@
   </div>
 </div>
 
+<!-- LOCK SCREEN TIMER SETUP -->
+<div id="lockscreen-sheet">
+  <div class="install-backdrop" onclick="closeLockScreenSheet()"></div>
+  <div class="install-card">
+    <div class="install-header">
+      <div>
+        <div class="install-title">Lock Screen timer</div>
+        <div class="install-sub">MIRROR SESSIONS TO THE CLOCK APP</div>
+      </div>
+      <button class="install-dismiss" onclick="closeLockScreenSheet()">×</button>
+    </div>
+
+    <div class="modal-body">
+      iOS won't let a web app draw on the Lock Screen, so focus can drive Apple's
+      <strong>Clock</strong> timer instead — it ticks on the always-on display and survives
+      locking. This needs a one-time Shortcut, created by you on this iPhone.
+    </div>
+
+    <div class="install-steps">
+      <div class="install-step">
+        <div class="install-step-num">1</div>
+        <div class="install-step-text">
+          Open Shortcuts → new shortcut, named exactly <strong>Focus Timer</strong>
+          <span>The name must match or focus can't call it</span>
+        </div>
+      </div>
+      <div class="install-step">
+        <div class="install-step-num">2</div>
+        <div class="install-step-text">
+          Add <strong>Cancel Timer</strong>, then <strong>Start Timer</strong> for
+          <strong>Shortcut Input</strong> minutes
+          <span>Cancel first so only one timer is ever alive</span>
+        </div>
+      </div>
+      <div class="install-step">
+        <div class="install-step-num">3</div>
+        <div class="install-step-text">
+          In shortcut settings, turn <strong>Show When Run</strong> OFF
+          <span>So it runs as a banner and returns you to focus</span>
+        </div>
+      </div>
+    </div>
+
+    <label class="ls-toggle-row">
+      <span>
+        Use Lock Screen timer
+        <span class="ls-toggle-sub">Countdown sessions only</span>
+      </span>
+      <input type="checkbox" id="lockScreenToggle" onchange="setLockScreenEnabled(this.checked)" />
+    </label>
+
+    <a class="btn-secondary" id="lockScreenTestBtn" role="button">RUN A 1-MIN TEST</a>
+  </div>
+</div>
+
 <!-- SIGN-IN SCREEN -->
 <div id="signin-screen">
   <div class="signin-logo">focus.</div>
@@ -1098,6 +1199,7 @@
       <img class="user-avatar" id="userAvatar" src="" alt="" />
     </div>
     <div class="user-menu" id="userMenu">
+      <button class="user-menu-item" onclick="openLockScreenSheet()">Lock Screen timer</button>
       <button class="user-menu-item" onclick="window.location='/auth/logout'">Log out</button>
     </div>
   </div>
@@ -1153,10 +1255,11 @@
       </div>
     </div>
 
-    <button class="btn-primary" id="mainBtn" onclick="handleMainBtn()">START FOCUS</button>
+    <a class="btn-primary" id="mainBtn" role="button" onclick="handleMainBtn()">START FOCUS</a>
 
     <div class="btn-row" id="secondaryBtns" style="display:none;">
-      <button class="btn-secondary" style="flex:1" onclick="handleStop()">STOP</button>
+      <a class="btn-secondary" id="resyncBtn" role="button" style="flex:1; display:none">RESYNC</a>
+      <a class="btn-secondary" id="stopBtn" role="button" style="flex:1" onclick="handleStop()">STOP</a>
     </div>
   </div>
 </div>
@@ -1383,7 +1486,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260816_1613';
+const VERSION = '20260902_2155';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -1405,6 +1508,75 @@ function updateSliderVisibility() {
   }
 }
 
+// ── LOCK SCREEN TIMER (iOS Shortcuts → Clock app) ──
+// A PWA can't render on the Lock Screen — ActivityKit/WidgetKit are native-only, and web push
+// can't be pinned or survive an unlock. So we drive Apple's own Clock timer instead: its Live
+// Activity ticks on the always-on display, sits above notifications, and costs zero pushes.
+//
+// One user-created shortcut (SHORTCUT_NAME) takes a minutes value and internally does
+// Cancel Timer → Start Timer, so a single tap can never leave two timers alive and "the current
+// timer" that Cancel targets is unambiguous. Sync is strictly one-way, app → Clock: the Clock
+// can't report back, so if the user pauses or cancels from the Lock Screen we won't know.
+const SHORTCUT_NAME = 'Focus Timer';
+
+function lockScreenEnabled() { return localStorage.getItem('focus_lockscreen') === '1'; }
+
+// text=0 cancels only; a positive value cancels then starts a fresh timer of that many minutes.
+function shortcutUrl(mins) {
+  return `shortcuts://run-shortcut?name=${encodeURIComponent(SHORTCUT_NAME)}&input=text&text=${mins}`;
+}
+
+// iOS only follows a shortcuts:// jump from a real <a> tap (assigning location.href is unreliable
+// in standalone mode), so START/STOP are anchors and we keep their href matching what a tap
+// should do right now instead of navigating from script.
+function updateShortcutLinks() {
+  const main = document.getElementById('mainBtn');
+  const stop = document.getElementById('stopBtn');
+  const resync = document.getElementById('resyncBtn');
+  const test = document.getElementById('lockScreenTestBtn');
+  const on = lockScreenEnabled();
+  // Count-up has no end time, so there's nothing for the Clock to count down to.
+  const usable = on && timerMode === 'countdown';
+
+  if (usable && timerState === 'idle') main.href = shortcutUrl(selectedDuration);
+  else main.removeAttribute('href');
+
+  // Stopping early must cancel the Clock timer too, or it alarms at the original end time.
+  if (usable) stop.href = shortcutUrl(0);
+  else stop.removeAttribute('href');
+
+  // Nothing can read the Clock's state back, so a Lock Screen pause/cancel is invisible to us.
+  // RESYNC is the manual repair: rebuild the Clock timer from our own remaining time. It has to
+  // be user-tapped — a shortcuts:// jump needs a foreground gesture, so this can't self-heal.
+  if (usable && timerState === 'running') {
+    resync.href = shortcutUrl(Math.max(1, Math.ceil(remainingSeconds / 60)));
+    resync.style.display = '';
+  } else {
+    resync.removeAttribute('href');
+    resync.style.display = 'none';
+  }
+
+  test.href = shortcutUrl(1);
+  test.style.opacity = on ? '1' : '0.4';
+  test.style.pointerEvents = on ? 'auto' : 'none';
+}
+
+function setLockScreenEnabled(on) {
+  localStorage.setItem('focus_lockscreen', on ? '1' : '0');
+  updateShortcutLinks();
+}
+
+function openLockScreenSheet() {
+  document.getElementById('userMenu').classList.remove('open');
+  document.getElementById('lockScreenToggle').checked = lockScreenEnabled();
+  updateShortcutLinks();
+  document.getElementById('lockscreen-sheet').classList.add('visible');
+}
+
+function closeLockScreenSheet() {
+  document.getElementById('lockscreen-sheet').classList.remove('visible');
+}
+
 // ── INIT ──
 function init() {
   const ver = document.getElementById('appVersion');
@@ -1423,6 +1595,7 @@ function init() {
     updateSliderVisibility();
     document.getElementById('ringProgress').style.strokeDashoffset = CIRCUMFERENCE;
   }
+  updateShortcutLinks();
 }
 
 function updateTodayDate() {
@@ -1448,6 +1621,7 @@ function setMode(mode) {
     document.getElementById('timerLabel').textContent = 'READY';
   }
   updateDisplay();
+  updateShortcutLinks();
 }
 
 // ── SLIDER ──
@@ -1458,6 +1632,7 @@ function onSlider(val) {
   remainingSeconds = totalSeconds;
   document.getElementById('sliderVal').textContent = `${mins} min`;
   if (timerState === 'idle') updateDisplay();
+  updateShortcutLinks(); // href carries the duration, so it must track the slider
 }
 
 // ── TIMER ──
@@ -1494,6 +1669,7 @@ function setRunningUI() {
   // Lock down navigation during a session — only ending it should be active
   setNavEnabled(false);
   document.getElementById('timerLabel').textContent = 'FOCUSING';
+  updateShortcutLinks();
 }
 
 // Fade + disable the nav tabs and profile menu while a session runs
@@ -1553,6 +1729,7 @@ function resumeSession(active) {
   setActive(); // re-persist locally + to server (covers a resume sourced from either)
   if (timerMode === 'countup') startHeartbeat();
   tick();
+  updateShortcutLinks(); // after tick(), so RESYNC offers the real remaining time
 }
 
 function tick() {
@@ -1651,6 +1828,7 @@ function resetTimer() {
   setNavEnabled(true);
   document.getElementById('timerLabel').textContent = 'READY';
   updateDisplay();
+  updateShortcutLinks();
   updateTodayStats();
   if (document.getElementById('report-view').classList.contains('active')) renderReport();
 }
@@ -2238,6 +2416,7 @@ document.addEventListener('visibilitychange', () => {
     acquireWakeLock();
     tick(); // recalculate immediately from wall clock — don't wait for next interval
     if (timerMode === 'countup') startHeartbeat(); // refresh lastSeen + restart pings
+    updateShortcutLinks(); // RESYNC must offer the remaining time as of now, not as of last paint
   }
 });
 
