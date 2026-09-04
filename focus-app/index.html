@@ -1133,34 +1133,28 @@
     <div class="modal-body">
       iOS won't let a web app draw on the Lock Screen, so focus drives Apple's <strong>Clock</strong>
       instead — countdowns use the Timer, count-ups use the Stopwatch. Both tick on the always-on
-      display and survive locking. One Shortcut, named exactly <strong>Focus Timer</strong>,
-      handles all of it.
+      display and survive locking.
     </div>
 
     <div class="install-steps">
       <div class="install-step">
         <div class="install-step-num">1</div>
         <div class="install-step-text">
-          Clear the Clock first — these run every time
-          <span>Cancel the current Timer → Stop the Stopwatch → Reset Stopwatch</span>
+          Add the Shortcut, then <strong>keep its name as “Focus Timer”</strong>
+          <span>focus calls it by name, so a renamed copy won't be found</span>
         </div>
       </div>
       <div class="install-step">
         <div class="install-step-num">2</div>
         <div class="install-step-text">
-          <strong>If</strong> Shortcut Input <strong>is</strong> “go” → Start Stopwatch
-          <span>That's a count-up. No input at all = stop, and both branches are skipped</span>
-        </div>
-      </div>
-      <div class="install-step">
-        <div class="install-step-num">3</div>
-        <div class="install-step-text">
-          <strong>Otherwise, If</strong> Shortcut Input has any value → Start a Timer for
-          Shortcut Input minutes
-          <span>That's a countdown, and the value is its length</span>
+          Turn the switch below on, then run the test
+          <span>You should see a 1-minute timer appear on your Lock Screen</span>
         </div>
       </div>
     </div>
+
+    <a class="btn-primary" href="https://www.icloud.com/shortcuts/2b1125b50d68444bb5e195a5208d0cfd"
+       target="_blank" rel="noopener">ADD THE SHORTCUT</a>
 
     <label class="ls-toggle-row">
       <span>
@@ -1489,7 +1483,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260903_2109';
+const VERSION = '20260903_2211';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
