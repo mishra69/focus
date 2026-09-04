@@ -1483,7 +1483,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260903_2232';
+const VERSION = '20260903_2241';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -2487,7 +2487,7 @@ const RETURN_TAG = 'focus-return';
 
 function showReturnNotification() {
   if (!swRegistration || !('Notification' in window) || Notification.permission !== 'granted') return;
-  clearTimeout(returnClearTimer); // never let an already-scheduled sweep dismiss this new one
+  returnClearTimers.forEach(clearTimeout); // never let a scheduled sweep dismiss this new one
   try {
     // Deliberately not awaiting serviceWorker.ready: this runs in the click that's about to
     // navigate away, and the page can be frozen before a promise would resolve.
@@ -2516,19 +2516,34 @@ function clearReturnNotification() {
 // dismiss the notification we raised on the way out — the exact thing it exists to prevent.
 // So wait, then confirm we're still here: during a handoff we'll be hidden by the time this
 // fires, while a genuine return stays visible.
-let returnClearTimer = null;
+//
+// Two passes: the first clears the local notification once we're properly back, the second lands
+// after the server's delayed re-send would have arrived, so returning early doesn't leave that
+// one sitting on the Lock Screen.
+const RETURN_SWEEP_DELAYS = [2000, 10000];
+let returnClearTimers = [];
 function clearReturnNotificationWhenBack() {
-  clearTimeout(returnClearTimer);
-  returnClearTimer = setTimeout(() => {
+  returnClearTimers.forEach(clearTimeout);
+  returnClearTimers = RETURN_SWEEP_DELAYS.map(ms => setTimeout(() => {
     if (document.visibilityState === 'visible') clearReturnNotification();
-  }, 2000);
+  }, ms));
+}
+
+// The local notification above gets buried almost immediately by the Clock's Live Activity taking
+// over the Dynamic Island. We can't re-raise it from here — this page is frozen the moment iOS
+// switches apps — so the server re-sends it on a delay, under the same tag, which replaces the
+// buried one and brings the banner back. keepalive lets the request survive the navigation.
+function requestReturnPing() {
+  try { fetch('/api/return-ping', { method: 'POST', keepalive: true }); } catch (e) {}
 }
 
 // One listener for every shortcut link. Runs after the inline guards, so a tap they cancelled
 // with preventDefault() (session already running, Lock Screen setting off) raises nothing.
 document.addEventListener('click', (e) => {
   if (e.defaultPrevented || !e.target.closest) return;
-  if (e.target.closest('a[href^="shortcuts://"]')) showReturnNotification();
+  if (!e.target.closest('a[href^="shortcuts://"]')) return;
+  showReturnNotification(); // instant, in case the delayed one is slow or undeliverable
+  requestReturnPing();
 });
 
 // ── PUSH SUBSCRIPTION ──
