@@ -1483,7 +1483,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260903_2256';
+const VERSION = '20260903_2344';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -2454,9 +2454,6 @@ document.addEventListener('click', (e) => {
 // Re-acquire if user switches tabs and comes back
 document.addEventListener('visibilitychange', () => {
   dlog('visibility', { state: document.visibilityState, timer: timerState });
-  // We're back, so the "tap to return" notification has served its purpose — whether or not a
-  // session is running, and however the user got here. Debounced: see the function's comment.
-  if (document.visibilityState === 'visible') clearReturnNotificationWhenBack();
   if (document.visibilityState === 'visible' && timerState === 'running') {
     acquireWakeLock();
     tick(); // recalculate immediately from wall clock — don't wait for next interval
@@ -2466,15 +2463,8 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ── SERVICE WORKER ──
-// Held in a variable so clearReturnNotification() can sweep without awaiting serviceWorker.ready.
-let swRegistration = null;
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').then(reg => {
-    swRegistration = reg;
-    // Sweep up one stranded by a previous launch. Debounced rather than immediate, because this
-    // promise can resolve *after* the user has already tapped START on a cold open.
-    clearReturnNotificationWhenBack();
-  }).catch(() => {});
+  navigator.serviceWorker.register('/sw.js');
 }
 
 // ── RETURN NOTIFICATION ──
@@ -2487,29 +2477,12 @@ if ('serviceWorker' in navigator) {
 // Raising one locally at tap time doesn't work and was removed: the Clock's Live Activity claims
 // the Dynamic Island within the same instant and buries it, so it's never visible when it would
 // be useful — just an extra entry in Notification Center.
-const RETURN_TAG = 'focus-return';
-
-// Tapping the notification closes it in the service worker, and the worker also withdraws it if
-// it lands while the app is already open. This covers the remaining case: it arrived while we
-// were away, and we came back by app switcher or the iOS back chip instead of tapping it.
-function clearReturnNotification() {
-  if (!swRegistration || !swRegistration.getNotifications) return;
-  try {
-    swRegistration.getNotifications({ tag: RETURN_TAG })
-      .then(list => list.forEach(n => n.close()))
-      .catch(() => {});
-  } catch (e) {}
-}
-
-// Handing off to Shortcuts flickers this page back to "visible" for an instant, so confirm we're
-// really here before sweeping: mid-handoff we'll be hidden again by the time this fires.
-let returnClearTimer = null;
-function clearReturnNotificationWhenBack() {
-  clearTimeout(returnClearTimer);
-  returnClearTimer = setTimeout(() => {
-    if (document.visibilityState === 'visible') clearReturnNotification();
-  }, 2000);
-}
+//
+// Nor is there any point sweeping it away once we're back. That was tried and removed: on iOS,
+// close() doesn't withdraw an already-delivered push from Notification Center, so the timers only
+// looked like cleanup. A constant `tag` is what actually keeps it under control — each trip
+// replaces the last, so there's one recyclable entry rather than a trail. The Notifications API
+// has no display TTL, so a notification can't expire on its own either.
 
 // Ask the server for the delayed push on the way out. keepalive lets the request survive the
 // navigation that's about to freeze this page.

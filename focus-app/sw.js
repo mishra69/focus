@@ -1,4 +1,4 @@
-const CACHE = 'focus-v13';
+const CACHE = 'focus-v14';
 const ASSETS = ['/', '/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -15,37 +15,24 @@ self.addEventListener('activate', e => {
   self.clients.claim();
 });
 
-const RETURN_TAG = 'focus-return';
-
 // The browser decrypts the push payload and hands it to us here already-decrypted. We accept
 // either the declarative shape ({ notification: {...} }) or a flat { title, body, ... }.
+//
+// Note there's no "withdraw it if the user is already back" branch here. That was tried and
+// removed: on iOS, close() doesn't appear to pull an already-delivered push out of Notification
+// Center, so it added a conditional that never actually cleaned anything up.
 self.addEventListener('push', e => {
   let data = {};
   try { data = e.data ? e.data.json() : {}; } catch (err) { data = {}; }
   const n = data.notification || data;
-  const tag = n.tag || 'focus';
-
-  e.waitUntil((async () => {
-    await self.registration.showNotification(n.title || 'Focus', {
-      body: n.body || '',
-      icon: n.icon || '/icon-192.png',
-      badge: '/icon-192.png',
-      tag,
-      data: { url: n.navigate || n.url || '/' }
-    });
-
-    // "Tap to return" only helps while the user is away. If they beat it back, withdraw it
-    // immediately rather than leaving it on the Lock Screen — a timer on the page can't win this
-    // race, since it can't know when the push actually lands. Push requires showing something,
-    // so this is show-then-withdraw rather than skip.
-    if (tag === RETURN_TAG) {
-      const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      if (wins.some(c => c.focused || c.visibilityState === 'visible')) {
-        const shown = await self.registration.getNotifications({ tag });
-        shown.forEach(x => x.close());
-      }
-    }
-  })());
+  e.waitUntil(self.registration.showNotification(n.title || 'Focus', {
+    body: n.body || '',
+    icon: n.icon || '/icon-192.png',
+    badge: '/icon-192.png',
+    // A constant tag per kind is what keeps these from piling up — each replaces the last.
+    tag: n.tag || 'focus',
+    data: { url: n.navigate || n.url || '/' }
+  }));
 });
 
 self.addEventListener('notificationclick', e => {
