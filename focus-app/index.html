@@ -1483,7 +1483,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260903_2248';
+const VERSION = '20260903_2256';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -2466,7 +2466,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ── SERVICE WORKER ──
-// Held in a variable so showReturnNotification() can fire without awaiting anything — see below.
+// Held in a variable so clearReturnNotification() can sweep without awaiting serviceWorker.ready.
 let swRegistration = null;
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').then(reg => {
@@ -2481,28 +2481,17 @@ if ('serviceWorker' in navigator) {
 // Firing a shortcut hands the screen to Shortcuts (and then Clock) with no route home: the
 // shortcuts:// scheme always fronts the Shortcuts app, x-callback-url's x-success opens the
 // default browser rather than the installed PWA, and Shortcuts' "Open App" action doesn't list
-// home-screen web apps. So on the way out we raise a local notification whose tap reopens focus —
-// the service worker's notificationclick handler focuses the existing window.
+// home-screen web apps. So the server sends a "tap to return" push a few seconds later, and the
+// service worker's notificationclick handler focuses the window again.
+//
+// Raising one locally at tap time doesn't work and was removed: the Clock's Live Activity claims
+// the Dynamic Island within the same instant and buries it, so it's never visible when it would
+// be useful — just an extra entry in Notification Center.
 const RETURN_TAG = 'focus-return';
 
-function showReturnNotification() {
-  if (!swRegistration || !('Notification' in window) || Notification.permission !== 'granted') return;
-  returnClearTimers.forEach(clearTimeout); // never let a scheduled sweep dismiss this new one
-  try {
-    // Deliberately not awaiting serviceWorker.ready: this runs in the click that's about to
-    // navigate away, and the page can be frozen before a promise would resolve.
-    swRegistration.showNotification('focus', {
-      body: 'Tap to return',
-      icon: '/icon-192.png',
-      badge: '/icon-192.png',
-      tag: RETURN_TAG, // one at a time — a second trip replaces it rather than stacking
-      data: { url: '/' }
-    });
-  } catch (e) {}
-}
-
-// Tapping the notification closes it in the service worker, but coming back any other way — the
-// app switcher, the iOS back chip — would otherwise strand it on the Lock Screen.
+// Tapping the notification closes it in the service worker, and the worker also withdraws it if
+// it lands while the app is already open. This covers the remaining case: it arrived while we
+// were away, and we came back by app switcher or the iOS back chip instead of tapping it.
 function clearReturnNotification() {
   if (!swRegistration || !swRegistration.getNotifications) return;
   try {
@@ -2512,27 +2501,18 @@ function clearReturnNotification() {
   } catch (e) {}
 }
 
-// Handing off to Shortcuts flickers this page back to "visible" for an instant, which would
-// dismiss the notification we raised on the way out — the exact thing it exists to prevent.
-// So wait, then confirm we're still here: during a handoff we'll be hidden by the time this
-// fires, while a genuine return stays visible.
-//
-// Two passes: the first clears the local notification once we're properly back, the second lands
-// after the server's delayed re-send would have arrived, so returning early doesn't leave that
-// one sitting on the Lock Screen.
-const RETURN_SWEEP_DELAYS = [2000, 8000];
-let returnClearTimers = [];
+// Handing off to Shortcuts flickers this page back to "visible" for an instant, so confirm we're
+// really here before sweeping: mid-handoff we'll be hidden again by the time this fires.
+let returnClearTimer = null;
 function clearReturnNotificationWhenBack() {
-  returnClearTimers.forEach(clearTimeout);
-  returnClearTimers = RETURN_SWEEP_DELAYS.map(ms => setTimeout(() => {
+  clearTimeout(returnClearTimer);
+  returnClearTimer = setTimeout(() => {
     if (document.visibilityState === 'visible') clearReturnNotification();
-  }, ms));
+  }, 2000);
 }
 
-// The local notification above gets buried almost immediately by the Clock's Live Activity taking
-// over the Dynamic Island. We can't re-raise it from here — this page is frozen the moment iOS
-// switches apps — so the server re-sends it on a delay, under the same tag, which replaces the
-// buried one and brings the banner back. keepalive lets the request survive the navigation.
+// Ask the server for the delayed push on the way out. keepalive lets the request survive the
+// navigation that's about to freeze this page.
 function requestReturnPing() {
   try { fetch('/api/return-ping', { method: 'POST', keepalive: true }); } catch (e) {}
 }
@@ -2542,7 +2522,6 @@ function requestReturnPing() {
 document.addEventListener('click', (e) => {
   if (e.defaultPrevented || !e.target.closest) return;
   if (!e.target.closest('a[href^="shortcuts://"]')) return;
-  showReturnNotification(); // instant, in case the delayed one is slow or undeliverable
   requestReturnPing();
 });
 

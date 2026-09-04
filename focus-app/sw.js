@@ -1,4 +1,4 @@
-const CACHE = 'focus-v12';
+const CACHE = 'focus-v13';
 const ASSETS = ['/', '/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -15,19 +15,37 @@ self.addEventListener('activate', e => {
   self.clients.claim();
 });
 
+const RETURN_TAG = 'focus-return';
+
 // The browser decrypts the push payload and hands it to us here already-decrypted. We accept
 // either the declarative shape ({ notification: {...} }) or a flat { title, body, ... }.
 self.addEventListener('push', e => {
   let data = {};
   try { data = e.data ? e.data.json() : {}; } catch (err) { data = {}; }
   const n = data.notification || data;
-  e.waitUntil(self.registration.showNotification(n.title || 'Focus', {
-    body: n.body || '',
-    icon: n.icon || '/icon-192.png',
-    badge: '/icon-192.png',
-    tag: n.tag || 'focus',
-    data: { url: n.navigate || n.url || '/' }
-  }));
+  const tag = n.tag || 'focus';
+
+  e.waitUntil((async () => {
+    await self.registration.showNotification(n.title || 'Focus', {
+      body: n.body || '',
+      icon: n.icon || '/icon-192.png',
+      badge: '/icon-192.png',
+      tag,
+      data: { url: n.navigate || n.url || '/' }
+    });
+
+    // "Tap to return" only helps while the user is away. If they beat it back, withdraw it
+    // immediately rather than leaving it on the Lock Screen — a timer on the page can't win this
+    // race, since it can't know when the push actually lands. Push requires showing something,
+    // so this is show-then-withdraw rather than skip.
+    if (tag === RETURN_TAG) {
+      const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      if (wins.some(c => c.focused || c.visibilityState === 'visible')) {
+        const shown = await self.registration.getNotifications({ tag });
+        shown.forEach(x => x.close());
+      }
+    }
+  })());
 });
 
 self.addEventListener('notificationclick', e => {
