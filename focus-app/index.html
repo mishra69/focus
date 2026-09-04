@@ -1483,7 +1483,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260903_2228';
+const VERSION = '20260903_2232';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -2454,9 +2454,9 @@ document.addEventListener('click', (e) => {
 // Re-acquire if user switches tabs and comes back
 document.addEventListener('visibilitychange', () => {
   dlog('visibility', { state: document.visibilityState, timer: timerState });
-  // Unconditional: we're back, so the "tap to return" notification has served its purpose —
-  // whether or not a session is running, and however the user got here.
-  if (document.visibilityState === 'visible') clearReturnNotification();
+  // We're back, so the "tap to return" notification has served its purpose — whether or not a
+  // session is running, and however the user got here. Debounced: see the function's comment.
+  if (document.visibilityState === 'visible') clearReturnNotificationWhenBack();
   if (document.visibilityState === 'visible' && timerState === 'running') {
     acquireWakeLock();
     tick(); // recalculate immediately from wall clock — don't wait for next interval
@@ -2471,7 +2471,9 @@ let swRegistration = null;
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').then(reg => {
     swRegistration = reg;
-    clearReturnNotification(); // drop a stale one left over from a previous launch
+    // Sweep up one stranded by a previous launch. Debounced rather than immediate, because this
+    // promise can resolve *after* the user has already tapped START on a cold open.
+    clearReturnNotificationWhenBack();
   }).catch(() => {});
 }
 
@@ -2485,6 +2487,7 @@ const RETURN_TAG = 'focus-return';
 
 function showReturnNotification() {
   if (!swRegistration || !('Notification' in window) || Notification.permission !== 'granted') return;
+  clearTimeout(returnClearTimer); // never let an already-scheduled sweep dismiss this new one
   try {
     // Deliberately not awaiting serviceWorker.ready: this runs in the click that's about to
     // navigate away, and the page can be frozen before a promise would resolve.
@@ -2507,6 +2510,18 @@ function clearReturnNotification() {
       .then(list => list.forEach(n => n.close()))
       .catch(() => {});
   } catch (e) {}
+}
+
+// Handing off to Shortcuts flickers this page back to "visible" for an instant, which would
+// dismiss the notification we raised on the way out — the exact thing it exists to prevent.
+// So wait, then confirm we're still here: during a handoff we'll be hidden by the time this
+// fires, while a genuine return stays visible.
+let returnClearTimer = null;
+function clearReturnNotificationWhenBack() {
+  clearTimeout(returnClearTimer);
+  returnClearTimer = setTimeout(() => {
+    if (document.visibilityState === 'visible') clearReturnNotification();
+  }, 2000);
 }
 
 // One listener for every shortcut link. Runs after the inline guards, so a tap they cancelled
