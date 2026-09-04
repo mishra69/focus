@@ -2520,7 +2520,7 @@ function clearReturnNotification() {
 // Two passes: the first clears the local notification once we're properly back, the second lands
 // after the server's delayed re-send would have arrived, so returning early doesn't leave that
 // one sitting on the Lock Screen.
-const RETURN_SWEEP_DELAYS = [2000, 10000];
+const RETURN_SWEEP_DELAYS = [2000, 8000];
 let returnClearTimers = [];
 function clearReturnNotificationWhenBack() {
   returnClearTimers.forEach(clearTimeout);

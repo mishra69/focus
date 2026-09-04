@@ -6,8 +6,12 @@ Running list of follow-ups and design decisions, so they survive across sessions
 
 - [x] **Server push renders on iOS** — switched completion push from declarative-only to a
   service-worker `push` handler (`sw.js`) + `sendWebPush`. Verified on-device. (`1387b12`)
-- [x] **Count-up check-ins** — DO arms "Still focusing?" at 60m, then every 30m, capped at 6h,
-  re-arming after each. Completion push TTL raised 10m → 6h; check-ins expire after 30m. (`d0f3fb1`)
+- [x] **Count-up check-ins** — DO arms "Still focusing?" at 60m, then every 30m, capped at 6h.
+  Completion push TTL raised 10m → 6h; check-ins expire after 30m. (`d0f3fb1`)
+- [x] **Heartbeat gating** — while a count-up is on screen the client pings `/api/heartbeat` every
+  3m; the DO only fires a check-in once it's past the 60m floor AND the screen's been dark ≥10m
+  (no heartbeat) AND ≥30m since the last check-in. So no pings while you're looking at the timer;
+  the alarm self-polls ~every 10m and fires ~10m after the app goes dark.
 - [x] **Abandonment: ask, don't silently bank** — on reopen of a count-up past the 2h mark, prompt
   Save (real elapsed) / Discard instead of auto-saving a 120-min cap. Recovery saves now use a
   **deterministic id derived from startTime**, so no path can double-count the same session.

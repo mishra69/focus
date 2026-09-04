@@ -8,6 +8,8 @@ sed -i '' "s/const VERSION = '[^']*'/const VERSION = '$VERSION'/" focus-app/inde
 
 npx wrangler deploy
 
-git add focus-app/index.html
+# -u stages every tracked file that changed — worker.js and sw.js ship with the deploy, so they
+# must be committed with it. Untracked files are deliberately left alone (see .gitignore).
+git add -u
 git commit -m "deploy $VERSION"
 git push

@@ -5,7 +5,7 @@ const REDIRECT_URI = `${APP_ORIGIN}/auth/callback`;
 const SCOPE = 'openid email profile';
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
     if (url.pathname === '/auth/login') return handleLogin(env);
@@ -14,6 +14,8 @@ export default {
     if (url.pathname === '/api/me') return handleMe(request, env);
     if (url.pathname === '/api/sessions') return handleSessions(request, env);
     if (url.pathname === '/api/active') return handleActive(request, env);
+    if (url.pathname === '/api/heartbeat') return handleHeartbeat(request, env);
+    if (url.pathname === '/api/return-ping') return handleReturnPing(request, env, ctx);
     if (url.pathname === '/api/log') return handleLog(request, env);
     if (url.pathname === '/api/audit') return handleAudit(request, env);
     if (url.pathname === '/api/push/key') return Response.json({ key: env.VAPID_PUBLIC_KEY });
@@ -216,6 +218,51 @@ async function handlePushSubscribe(request, env) {
   return Response.json({ ok: true });
 }
 
+// The client raises a local "tap to return" notification on its way out to a Shortcut, but the
+// Clock's Live Activity claims the Dynamic Island a moment later and buries the banner. The page
+// is frozen by then and can't re-raise it — a setTimeout there won't run until the user is already
+// back — so the delay has to live here. Same tag as the local one, so this *replaces* it rather
+// than stacking, re-showing the banner once the Live Activity has settled.
+const RETURN_PING_DELAY_MS = 3000;
+const RETURN_TAG = 'focus-return';
+
+async function handleReturnPing(request, env, ctx) {
+  const session = await getSession(request, env);
+  if (!session) return new Response('Unauthorized', { status: 401 });
+  if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+
+  const raw = await env.SESSIONS.get(`push:${session.userId}`);
+  if (!raw) return Response.json({ ok: false, error: 'no subscription' }, { status: 404 });
+
+  const payload = JSON.stringify({
+    web_push: 8030,
+    notification: {
+      title: 'focus',
+      body: 'Tap to return',
+      navigate: `${APP_ORIGIN}/`,
+      icon: '/icon-192.png',
+      tag: RETURN_TAG
+    }
+  });
+
+  // Respond immediately; the wait happens after the response, on the way to the push service.
+  ctx.waitUntil((async () => {
+    await new Promise(r => setTimeout(r, RETURN_PING_DELAY_MS));
+    try {
+      // Short TTL: a "tap to return" that arrives minutes later is noise, not help.
+      const res = await sendWebPush(env, JSON.parse(raw), payload, 60);
+      if (res.status === 404 || res.status === 410) {
+        await env.SESSIONS.delete(`push:${session.userId}`);
+      }
+      await pushLog(env, session.userId, 'return-ping', { status: res.status });
+    } catch (e) {
+      await pushLog(env, session.userId, 'return-ping-err', { error: String((e && e.message) || e) });
+    }
+  })());
+
+  return Response.json({ ok: true });
+}
+
 // Fire a one-off push on demand to verify delivery without waiting out a countdown.
 // Returns the push service's HTTP status (201 = accepted; 403 VAPID; 400 encryption; 410 gone).
 async function handlePushTest(request, env) {
@@ -281,21 +328,27 @@ function hostOf(url) {
 
 // ── ALARM SCHEDULING (Durable Object alarm per user) ──
 // Countdown → one alarm at the completion instant (completion push).
-// Count-up  → recurring "still focusing?" check-ins at 60m, then every 30m, capped at 6h.
+// Count-up  → "still focusing?" check-ins, but only once we've lost sight of the user: no ping in
+//   the first 60m, none while the screen is on (client heartbeats keep `lastSeen` fresh), and only
+//   after the app's been dark for the grace window — then every 30m, capped at 6h.
 
-const CHECKIN_FIRST_MS = 60 * 60 * 1000;    // first count-up check-in 60 min in
-const CHECKIN_INTERVAL_MS = 30 * 60 * 1000; // then every 30 min
+const CHECKIN_FLOOR_MS = 60 * 60 * 1000;    // never check in during the first 60 min
+const CHECKIN_INTERVAL_MS = 30 * 60 * 1000; // min spacing between check-ins
+const HEARTBEAT_GRACE_MS = 10 * 60 * 1000;  // screen dark (no heartbeat) this long → eligible
 const CHECKIN_MAX_MS = 6 * 60 * 60 * 1000;  // stop pinging past 6h (assume abandoned)
 const TTL_COMPLETE = 6 * 60 * 60;           // completion push held up to 6h if device offline
 const TTL_CHECKIN = 30 * 60;                 // a check-in is stale after its interval; let it expire
 
-// Next count-up check-in instant (fixed cadence from start), or null once past the cap.
-function nextCheckin(start, now) {
-  const first = start + CHECKIN_FIRST_MS;
-  const fireAt = now < first
-    ? first
-    : first + (Math.floor((now - first) / CHECKIN_INTERVAL_MS) + 1) * CHECKIN_INTERVAL_MS;
-  return fireAt <= start + CHECKIN_MAX_MS ? fireAt : null;
+// The earliest instant the next check-in may fire, honouring all three gates (floor, grace since
+// last heartbeat, spacing since last check-in). null once past the 6h cap. If this is <= now, a
+// check-in is due right now; if it's in the future, that's when to re-poll.
+function nextCheckin(start, lastSeen, lastCheckin) {
+  const t = Math.max(
+    start + CHECKIN_FLOOR_MS,
+    lastSeen + HEARTBEAT_GRACE_MS,
+    lastCheckin ? lastCheckin + CHECKIN_INTERVAL_MS : 0
+  );
+  return t <= start + CHECKIN_MAX_MS ? t : null;
 }
 
 function timerStub(env, userId) {
@@ -324,18 +377,40 @@ async function cancelCompletion(env, userId) {
   } catch (e) {}
 }
 
+// Client "screen is on" ping for a running count-up. Refreshes lastSeen in the DO so check-ins
+// stay suppressed while the app is in front; when these stop (app backgrounded/killed), the DO's
+// grace window lapses and check-ins begin.
+async function handleHeartbeat(request, env) {
+  const session = await getSession(request, env);
+  if (!session) return new Response('Unauthorized', { status: 401 });
+  if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+  try { await timerStub(env, session.userId).heartbeat(); } catch (e) {}
+  return Response.json({ ok: true });
+}
+
 // ── DURABLE OBJECT: one per user. Fires completion (countdown) or check-in (count-up) pushes. ──
 
 export class FocusTimerDO extends DurableObject {
-  // Persist the active session and arm the next alarm for it.
+  // Persist the active session and arm the next alarm for it. lastSeen starts at now (the session
+  // just started with the app on screen); the client refreshes it via heartbeat().
   async schedule(userId, active) {
     await this.ctx.storage.put({
       userId,
       mode: active.mode,
       startTime: active.startTime,
-      duration: active.duration || null
+      duration: active.duration || null,
+      lastSeen: Date.now(),
+      lastCheckin: 0
     });
+    await pushLog(this.env, userId, 'schedule', { mode: active.mode });
     await this.#arm();
+  }
+
+  // Count-up only: the app is on screen, so push `lastSeen` forward. Cheap (no alarm churn) — the
+  // next alarm re-reads lastSeen when it fires and re-evaluates eligibility.
+  async heartbeat() {
+    if (await this.ctx.storage.get('mode') !== 'countup') return;
+    await this.ctx.storage.put('lastSeen', Date.now());
   }
 
   async cancel() {
@@ -344,12 +419,12 @@ export class FocusTimerDO extends DurableObject {
   }
 
   async #clear() {
-    await this.ctx.storage.delete(['userId', 'mode', 'startTime', 'duration', 'kind']);
+    await this.ctx.storage.delete(['userId', 'mode', 'startTime', 'duration', 'kind', 'lastSeen', 'lastCheckin']);
   }
 
   // Compute the next alarm from stored state and set it; clears everything once nothing is due.
   async #arm() {
-    const s = await this.ctx.storage.get(['userId', 'mode', 'startTime', 'duration']);
+    const s = await this.ctx.storage.get(['userId', 'mode', 'startTime', 'duration', 'lastSeen', 'lastCheckin']);
     const userId = s.get('userId'), mode = s.get('mode');
     const start = Date.parse(s.get('startTime'));
     const now = Date.now();
@@ -360,14 +435,13 @@ export class FocusTimerDO extends DurableObject {
       const t = dur ? start + dur * 1000 : 0;
       if (t > now) { fireAt = t; kind = 'complete'; }
     } else if (mode === 'countup') {
-      fireAt = nextCheckin(start, now);
+      fireAt = nextCheckin(start, s.get('lastSeen') || start, s.get('lastCheckin') || 0);
       kind = 'checkin';
     }
 
     if (fireAt) {
       await this.ctx.storage.put('kind', kind);
       await this.ctx.storage.setAlarm(fireAt);
-      await pushLog(this.env, userId, 'schedule', { kind, fireAt: new Date(fireAt).toISOString() });
     } else {
       await this.ctx.storage.deleteAlarm();
       await pushLog(this.env, userId, 'schedule-skip', { mode });
@@ -376,10 +450,22 @@ export class FocusTimerDO extends DurableObject {
   }
 
   async alarm(alarmInfo) {
-    const s = await this.ctx.storage.get(['userId', 'startTime', 'kind']);
+    const s = await this.ctx.storage.get(['userId', 'startTime', 'kind', 'lastSeen', 'lastCheckin']);
     const userId = s.get('userId');
     if (!userId) return;
     const kind = s.get('kind');
+    const now = Date.now();
+    const start = Date.parse(s.get('startTime'));
+
+    // Count-up: the alarm doubles as a poll. If we're not eligible yet (screen seen recently, still
+    // inside the floor, or too soon since the last check-in), re-arm to the next candidate and send
+    // nothing. This is the hot path while the app is on screen, so it stays cheap and unlogged.
+    if (kind === 'checkin') {
+      const next = nextCheckin(start, s.get('lastSeen') || start, s.get('lastCheckin') || 0);
+      if (next === null) { await this.#clear(); return; }             // past the 6h cap — give up
+      if (next > now) { await this.ctx.storage.setAlarm(next); return; } // not due yet; poll later
+    }
+
     await pushLog(this.env, userId, 'alarm-fire', { kind, retry: alarmInfo && alarmInfo.retryCount });
 
     const raw = await this.env.SESSIONS.get(`push:${userId}`);
@@ -392,7 +478,7 @@ export class FocusTimerDO extends DurableObject {
 
     let payload, ttl;
     if (kind === 'checkin') {
-      const mins = Math.max(1, Math.round((Date.now() - Date.parse(s.get('startTime'))) / 60000)) || 1;
+      const mins = Math.max(1, Math.round((now - start) / 60000)) || 1;
       payload = JSON.stringify({
         web_push: 8030,
         notification: {
@@ -438,9 +524,13 @@ export class FocusTimerDO extends DurableObject {
       throw new Error(`push failed: ${res.status}`);
     }
 
-    // Completion is one-shot; a check-in re-arms the next one (until the 6h cap).
-    if (kind === 'checkin') await this.#arm();
-    else await this.#clear();
+    // Completion is one-shot; a check-in records the time it fired and re-arms the next one.
+    if (kind === 'checkin') {
+      await this.ctx.storage.put('lastCheckin', now);
+      await this.#arm();
+    } else {
+      await this.#clear();
+    }
   }
 }
 
