@@ -1,4 +1,4 @@
-const CACHE = 'focus-v15';
+const CACHE = 'focus-v16';
 const ASSETS = ['/', '/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -31,6 +31,9 @@ self.addEventListener('push', e => {
     badge: '/icon-192.png',
     // A constant tag per kind is what keeps these from piling up — each replaces the last.
     tag: n.tag || 'focus',
+    // Periodic count-up refreshes set this: they need to be present on the Lock Screen without
+    // interrupting the session they exist to protect.
+    silent: !!n.silent,
     data: { url: n.navigate || n.url || '/' }
   }));
 });

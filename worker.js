@@ -330,17 +330,26 @@ function hostOf(url) {
 }
 
 // ── ALARM SCHEDULING (Durable Object alarm per user) ──
-// Countdown → one alarm at the completion instant (completion push).
-// Count-up  → "still focusing?" check-ins, but only once we've lost sight of the user: no ping in
-//   the first 60m, none while the screen is on (client heartbeats keep `lastSeen` fresh), and only
-//   after the app's been dark for the grace window — then every 30m, capped at 6h.
+// Countdown → one alarm at the completion instant (completion push). Nothing periodic: the Timer
+//   rings by itself at the end, and its Live Activity ✕ is a safe way to dismiss a finished timer.
+// Count-up  → a recurring "tap to return" notification, re-sent under a constant tag so it
+//   replaces itself rather than stacking.
+//
+// It exists because the Stopwatch Live Activity's ✕ ends the session in the Clock without the app
+// ever knowing, and it's the most tempting thing on the Lock Screen. The notification sits beside
+// it as the safe target: tapping it reopens focus, where stopping is recorded properly. It has to
+// be re-sent because a Lock Screen notification decays — other apps push it down, and unlocking
+// clears it from the Lock Screen altogether.
+//
+// Still suppressed while the app is actually on screen: client heartbeats keep `lastSeen` fresh,
+// and nothing is sent until it's been dark for the grace window.
 
-const CHECKIN_FLOOR_MS = 60 * 60 * 1000;    // never check in during the first 60 min
-const CHECKIN_INTERVAL_MS = 30 * 60 * 1000; // min spacing between check-ins
+const CHECKIN_FLOOR_MS = 10 * 60 * 1000;    // nothing in the opening minutes of a session
+const CHECKIN_INTERVAL_MS = 20 * 60 * 1000; // then refresh this often, so it stays near the top
 const HEARTBEAT_GRACE_MS = 10 * 60 * 1000;  // screen dark (no heartbeat) this long → eligible
 const CHECKIN_MAX_MS = 6 * 60 * 60 * 1000;  // stop pinging past 6h (assume abandoned)
 const TTL_COMPLETE = 6 * 60 * 60;           // completion push held up to 6h if device offline
-const TTL_CHECKIN = 30 * 60;                 // a check-in is stale after its interval; let it expire
+const TTL_CHECKIN = 20 * 60;                 // a refresh is stale once the next one is due
 
 // The earliest instant the next check-in may fire, honouring all three gates (floor, grace since
 // last heartbeat, spacing since last check-in). null once past the 6h cap. If this is <= now, a
@@ -482,14 +491,19 @@ export class FocusTimerDO extends DurableObject {
     let payload, ttl;
     if (kind === 'checkin') {
       const mins = Math.max(1, Math.round((now - start) / 60000)) || 1;
+      // Same tag as the return ping, so there is only ever one focus notification on the Lock
+      // Screen — each refresh replaces the last instead of adding to a pile. Not declarative
+      // (`web_push: 8030`), because iOS renders those natively and skips sw.js's push handler,
+      // which is the only place the tag is applied — the replacement depends on going through it.
+      // Silent: this fires every 20 min during deep work, so it must appear without alerting.
       payload = JSON.stringify({
-        web_push: 8030,
         notification: {
-          title: 'Still focusing?',
-          body: `${mins} min in — open Focus to keep the timer running, or stop it.`,
+          title: 'focus',
+          body: `${mins} min — tap to return`,
           navigate: `${APP_ORIGIN}/`,
           icon: '/icon-192.png',
-          tag: 'focus-checkin'
+          tag: RETURN_TAG,
+          silent: true
         }
       });
       ttl = TTL_CHECKIN;
