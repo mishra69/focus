@@ -234,8 +234,11 @@ async function handleReturnPing(request, env, ctx) {
   const raw = await env.SESSIONS.get(`push:${session.userId}`);
   if (!raw) return Response.json({ ok: false, error: 'no subscription' }, { status: 404 });
 
+  // Deliberately NOT declarative (no `web_push: 8030`). A declarative payload is rendered natively
+  // by iOS, which skips sw.js's push handler — the only place `tag` is applied — so successive
+  // "tap to return" notifications stack instead of replacing each other. Sending it as a plain
+  // push routes it through the service worker, where the tag actually takes effect.
   const payload = JSON.stringify({
-    web_push: 8030,
     notification: {
       title: 'focus',
       body: 'Tap to return',
