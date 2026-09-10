@@ -226,6 +226,31 @@ async function handlePushSubscribe(request, env) {
 const RETURN_PING_DELAY_MS = 3000;
 const RETURN_TAG = 'focus-return';
 
+// The single "a session is live — tap to get back" notification, sent from two places: once when
+// a shortcut steals the screen, then periodically while a count-up runs (see the DO alarm). Both
+// send this exact payload, byte for byte.
+//
+// Deliberately NOT declarative (no `web_push: 8030`): iOS renders declarative pushes natively and
+// skips sw.js's push handler, which is the only place `tag` is applied.
+//
+// And deliberately constant — the elapsed minutes that used to be in the body are gone. They were
+// redundant (the Live Activity shows elapsed) and varying text can only hurt: it's a candidate
+// explanation for iOS refusing to collapse these, and there's nothing to weigh against dropping it.
+// Silent, because during a long count-up this repeats on a timer and must not interrupt the
+// session it exists to protect.
+function returnPayload() {
+  return JSON.stringify({
+    notification: {
+      title: 'focus',
+      body: 'Tap to return',
+      navigate: `${APP_ORIGIN}/`,
+      icon: '/icon-192.png',
+      tag: RETURN_TAG,
+      silent: true
+    }
+  });
+}
+
 async function handleReturnPing(request, env, ctx) {
   const session = await getSession(request, env);
   if (!session) return new Response('Unauthorized', { status: 401 });
@@ -234,19 +259,7 @@ async function handleReturnPing(request, env, ctx) {
   const raw = await env.SESSIONS.get(`push:${session.userId}`);
   if (!raw) return Response.json({ ok: false, error: 'no subscription' }, { status: 404 });
 
-  // Deliberately NOT declarative (no `web_push: 8030`). A declarative payload is rendered natively
-  // by iOS, which skips sw.js's push handler — the only place `tag` is applied — so successive
-  // "tap to return" notifications stack instead of replacing each other. Sending it as a plain
-  // push routes it through the service worker, where the tag actually takes effect.
-  const payload = JSON.stringify({
-    notification: {
-      title: 'focus',
-      body: 'Tap to return',
-      navigate: `${APP_ORIGIN}/`,
-      icon: '/icon-192.png',
-      tag: RETURN_TAG
-    }
-  });
+  const payload = returnPayload();
 
   // Respond immediately; the wait happens after the response, on the way to the push service.
   ctx.waitUntil((async () => {
@@ -492,22 +505,7 @@ export class FocusTimerDO extends DurableObject {
 
     let payload, ttl;
     if (kind === 'checkin') {
-      const mins = Math.max(1, Math.round((now - start) / 60000)) || 1;
-      // Same tag as the return ping, so there is only ever one focus notification on the Lock
-      // Screen — each refresh replaces the last instead of adding to a pile. Not declarative
-      // (`web_push: 8030`), because iOS renders those natively and skips sw.js's push handler,
-      // which is the only place the tag is applied — the replacement depends on going through it.
-      // Silent: this fires every 20 min during deep work, so it must appear without alerting.
-      payload = JSON.stringify({
-        notification: {
-          title: 'focus',
-          body: `${mins} min — tap to return`,
-          navigate: `${APP_ORIGIN}/`,
-          icon: '/icon-192.png',
-          tag: RETURN_TAG,
-          silent: true
-        }
-      });
+      payload = returnPayload(); // identical to the one sent when a shortcut steals the screen
       ttl = TTL_CHECKIN;
     } else {
       payload = JSON.stringify({
