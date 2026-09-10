@@ -1241,7 +1241,7 @@
         <span class="slider-val" id="sliderVal">30 min</span>
       </div>
       <input type="range" id="durationSlider" min="1" max="12" step="1" value="3"
-        oninput="onSlider(this.value)" />
+        oninput="onSlider(this.value, true)" />
       <div class="slider-ticks">
         <span class="slider-tick" style="left: 11px">10</span>
         <span class="slider-tick" style="left: calc((100% - 22px) * 0.18182 + 11px)">30</span>
@@ -1473,8 +1473,34 @@ async function saveSession(durationSeconds, id) {
     dlog('save-queued', { id: session.id });
   }
 }
-let timerMode = localStorage.getItem('focus_timer_mode') || 'countdown';
-let selectedDuration = 30;   // minutes (countdown only)
+// ── LAST-USED SETUP ──
+// Reopen with the mode and duration you last chose, so a habitual 45-minute countdown doesn't
+// need re-dialling every time. Expires, so one unusual session doesn't become the new default
+// forever — after the TTL it falls back to countdown / 30 min.
+const LS_SETUP = 'focus_last_setup';
+const SETUP_TTL_MS = 12 * 60 * 60 * 1000; // ~a working day; tomorrow starts from the default
+
+function loadSetup() {
+  try {
+    const s = JSON.parse(localStorage.getItem(LS_SETUP) || 'null');
+    if (!s || !s.at || Date.now() - s.at > SETUP_TTL_MS) return null;
+    return s;
+  } catch (e) { return null; }
+}
+
+// Only called from real user choices (slider input, mode tap) — never on load, or simply opening
+// the app each day would keep refreshing the timestamp and the TTL could never expire.
+function saveSetup() {
+  try {
+    localStorage.setItem(LS_SETUP, JSON.stringify({
+      mode: timerMode, mins: selectedDuration, at: Date.now()
+    }));
+  } catch (e) {}
+}
+
+const savedSetup = loadSetup();
+let timerMode = (savedSetup && savedSetup.mode) || 'countdown';
+let selectedDuration = (savedSetup && savedSetup.mins) || 30;   // minutes (countdown only)
 let totalSeconds = 30 * 60;
 let remainingSeconds = totalSeconds;
 let elapsedSeconds = 0;
@@ -1483,7 +1509,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260908_2042';
+const VERSION = '20260909_1846';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -1621,7 +1647,10 @@ function init() {
   ver.addEventListener('click', testPush); // hidden debug affordance
   updateTodayDate();
   updateTodayStats();
-  onSlider(3); // default 30 min
+  // Restore the last-used duration (or 30 min once the TTL has lapsed).
+  const step = Math.min(12, Math.max(1, Math.round(selectedDuration / 10)));
+  document.getElementById('durationSlider').value = step;
+  onSlider(step);
   // Restore last used mode
   if (timerMode === 'countup') {
     document.querySelectorAll('.mode-btn').forEach(b =>
@@ -1643,7 +1672,7 @@ function updateTodayDate() {
 function setMode(mode) {
   if (timerState !== 'idle') return;
   timerMode = mode;
-  localStorage.setItem('focus_timer_mode', mode);
+  saveSetup();
   document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
   event.target.classList.add('active');
 
@@ -1660,7 +1689,8 @@ function setMode(mode) {
 }
 
 // ── SLIDER ──
-function onSlider(val) {
+// fromUser distinguishes a drag from init's restore — only a real choice refreshes the TTL.
+function onSlider(val, fromUser) {
   const mins = sliderToMin(parseInt(val));
   selectedDuration = mins;
   totalSeconds = mins * 60;
@@ -1668,6 +1698,7 @@ function onSlider(val) {
   document.getElementById('sliderVal').textContent = `${mins} min`;
   if (timerState === 'idle') updateDisplay();
   updateShortcutLinks(); // href carries the duration, so it must track the slider
+  if (fromUser) saveSetup();
 }
 
 // ── TIMER ──
@@ -1742,7 +1773,7 @@ function startTimer() {
 // Pick up a still-running session after the OS killed and reloaded the page
 function resumeSession(active) {
   timerMode = active.mode;
-  localStorage.setItem('focus_timer_mode', timerMode);
+  saveSetup(); // a recovered session is still a real choice worth remembering
   document.querySelectorAll('.mode-btn').forEach(b =>
     b.classList.toggle('active', (b.textContent === 'COUNT UP') === (timerMode === 'countup'))
   );
