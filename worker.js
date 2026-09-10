@@ -278,8 +278,10 @@ async function handlePushTest(request, env) {
     return Response.json({ ok: false, error: 'no subscription stored' }, { status: 404 });
   }
 
+  // Non-declarative and byte-identical every time, on purpose: firing this twice is the control
+  // experiment for whether iOS honours `tag` replacement at all. Same tag + same content — if two
+  // taps still leave two notifications, tag is simply not respected and no payload tweak fixes it.
   const payload = JSON.stringify({
-    web_push: 8030,
     notification: {
       title: 'Focus',
       body: 'Test notification ✅',
