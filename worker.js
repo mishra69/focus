@@ -11,6 +11,7 @@ export default {
     if (url.pathname === '/auth/login') return handleLogin(env);
     if (url.pathname === '/auth/callback') return handleCallback(request, env);
     if (url.pathname === '/auth/logout') return handleLogout();
+    if (url.pathname === '/api/logout-cleanup') return handleLogoutCleanup(request, env);
     if (url.pathname === '/api/me') return handleMe(request, env);
     if (url.pathname === '/api/sessions') return handleSessions(request, env);
     if (url.pathname === '/api/active') return handleActive(request, env);
@@ -206,6 +207,23 @@ async function handleActive(request, env) {
 }
 
 // ── PUSH SUBSCRIPTIONS ──
+
+// Signing out has to unwire this device from the departing account. A push subscription belongs to
+// the *device*, not the user, so without this it stays stored under the old userId and that user's
+// Durable Object keeps pushing at whoever signs in next. Called just before /auth/logout, while the
+// cookie still identifies who is leaving.
+async function handleLogoutCleanup(request, env) {
+  const session = await getSession(request, env);
+  if (!session) return new Response('Unauthorized', { status: 401 });
+  if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+
+  await env.SESSIONS.delete(`push:${session.userId}`);
+  // Stop any armed completion/check-in alarm. The `active:` record is deliberately left intact, so
+  // signing back in still recovers an in-progress session (which re-arms the alarm).
+  try { await timerStub(env, session.userId).cancel(); } catch (e) {}
+  await pushLog(env, session.userId, 'logout-cleanup');
+  return Response.json({ ok: true });
+}
 
 async function handlePushSubscribe(request, env) {
   const session = await getSession(request, env);

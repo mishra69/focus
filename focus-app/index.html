@@ -1216,7 +1216,7 @@
     </div>
     <div class="user-menu" id="userMenu">
       <button class="user-menu-item" onclick="openLockScreenSheet()">Lock Screen timer</button>
-      <button class="user-menu-item" onclick="window.location='/auth/logout'">Log out</button>
+      <button class="user-menu-item" onclick="doLogout()">Log out</button>
     </div>
   </div>
 </nav>
@@ -1429,8 +1429,39 @@ function activePayload() {
   };
 }
 
+// Sign-out, with the device unwired from the departing account first. A push subscription belongs
+// to the device, so leaving it in place lets the old account's alarms keep pushing at whoever signs
+// in next. Runs while the cookie is still valid, then hands off to /auth/logout.
+//
+// Local records are deliberately NOT cleared: unsent sessions and an in-progress session are real
+// data, and they carry their owner's uid (see below), so they simply sit dormant until that account
+// returns rather than being destroyed or misfiled.
+async function doLogout() {
+  try { await fetch('/api/logout-cleanup', { method: 'POST' }); } catch (e) {}
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = reg && await reg.pushManager.getSubscription();
+    if (sub) await sub.unsubscribe();
+  } catch (e) {}
+  window.location = '/auth/logout';
+}
+
+// ── RECORD OWNERSHIP ──
+// localStorage is scoped to the origin, not the signed-in user, so on a device where two accounts
+// have both been used, A's unsent sessions and A's in-progress session are still sitting there when
+// B signs in — and would be POSTed under B's cookie, landing permanently in B's history. Every
+// local record therefore carries the userId that created it, and is only ever replayed for them.
+let currentUserId = null; // set in boot() once /api/me resolves
+
+// Records written before this existed carry no uid. On the single-account device that is almost
+// always the case, they belong to the current user — treating them as foreign would throw away
+// real sessions, so absent ownership reads as "mine".
+function ownedByCurrentUser(rec) {
+  return !rec || !rec.uid || !currentUserId || rec.uid === currentUserId;
+}
+
 function writeActiveLocal(obj) {
-  try { localStorage.setItem(LS_ACTIVE, JSON.stringify(obj)); } catch (e) {}
+  try { localStorage.setItem(LS_ACTIVE, JSON.stringify({ ...obj, uid: currentUserId })); } catch (e) {}
 }
 function readActiveLocal() {
   try { return JSON.parse(localStorage.getItem(LS_ACTIVE) || 'null'); } catch (e) { return null; }
@@ -1442,7 +1473,7 @@ function clearActiveLocal() {
 function queuePending(session) {
   try {
     const q = JSON.parse(localStorage.getItem(LS_PENDING) || '[]');
-    if (!q.some(s => s.id === session.id)) q.push(session);
+    if (!q.some(s => s.id === session.id)) q.push({ ...session, uid: currentUserId });
     localStorage.setItem(LS_PENDING, JSON.stringify(q));
   } catch (e) {}
 }
@@ -1454,11 +1485,15 @@ async function flushPending() {
   if (!q.length) return;
   const remaining = [];
   for (const session of q) {
+    // Another account's unsent session: keep it queued for when they sign back in, but never
+    // POST it under this cookie — that would file their focus time in this user's history.
+    if (!ownedByCurrentUser(session)) { remaining.push(session); continue; }
+    const { uid, ...payload } = session; // uid is local bookkeeping, not part of the record
     try {
       const res = await fetch('/api/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(session)
+        body: JSON.stringify(payload)
       });
       if (!res.ok) throw new Error('status ' + res.status);
       dlog('pending-flushed', { id: session.id });
@@ -1592,7 +1627,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20261001_0958';
+const VERSION = '20261001_1040';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -2825,6 +2860,7 @@ async function boot() {
   }
 
   if (user) {
+    currentUserId = user.userId; // before any local record is replayed or rewritten
     const avatar = document.getElementById('userAvatar');
     avatar.src = user.picture;
     avatar.alt = user.name;
@@ -2835,8 +2871,12 @@ async function boot() {
   init();
   checkInstall();
 
-  // Resume from the local copy immediately, before any further network work.
-  if (localActive) await recoverActive(localActive, 'local');
+  // Resume from the local copy immediately, before any further network work — but only if it is
+  // ours. A session left behind by another account on this device must not be recovered, saved,
+  // or counted here; it stays untouched for when they sign back in.
+  const mineActive = ownedByCurrentUser(localActive) ? localActive : null;
+  if (localActive && !mineActive) dlog('boot-active-other-user');
+  if (mineActive) await recoverActive(mineActive, 'local');
 
   // Reconcile with the server: retry queued saves first so the history load below
   // reflects them, then — only if we had no local session — fall back to the
@@ -2844,7 +2884,7 @@ async function boot() {
   try {
     await flushPending();
     await loadSessions();
-    if (!localActive) await checkActiveSession();
+    if (!mineActive) await checkActiveSession(); // a foreign local record must not mask ours
   } catch (e) {}
 
   flushLog();
