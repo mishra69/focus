@@ -14,6 +14,7 @@ export default {
     if (url.pathname === '/api/logout-cleanup') return handleLogoutCleanup(request, env);
     if (url.pathname === '/api/me') return handleMe(request, env);
     if (url.pathname === '/api/sessions') return handleSessions(request, env);
+    if (url.pathname === '/api/profiles') return handleProfiles(request, env);
     if (url.pathname === '/api/active') return handleActive(request, env);
     if (url.pathname === '/api/heartbeat') return handleHeartbeat(request, env);
     if (url.pathname === '/api/return-ping') return handleReturnPing(request, env, ctx);
@@ -109,6 +110,39 @@ async function handleMe(request, env) {
   const session = await getSession(request, env);
   if (!session) return Response.json(null);
   return Response.json(session);
+}
+
+// The user's profile list (labels, colours, active/archived), stored whole. Sessions reference a
+// profile only by id, so this is pure presentation: nothing here can lose or move a session.
+const PROFILE_COLOR = /^#[0-9a-f]{6}$/i;
+const MAX_PROFILES = 30;
+
+async function handleProfiles(request, env) {
+  const session = await getSession(request, env);
+  if (!session) return new Response('Unauthorized', { status: 401 });
+  const key = `profiles:${session.userId}`;
+
+  if (request.method === 'GET') {
+    const data = await env.SESSIONS.get(key);
+    return Response.json(data ? JSON.parse(data) : null);
+  }
+
+  if (request.method === 'PUT') {
+    let list;
+    try { list = await request.json(); } catch (e) { list = null; }
+    const valid = Array.isArray(list) && list.length > 0 && list.length <= MAX_PROFILES &&
+      list.some(p => p && p.active) &&
+      list.every(p => p && typeof p.id === 'string' && p.id.length <= 40 &&
+        typeof p.label === 'string' && p.label.trim() && p.label.length <= 24 &&
+        PROFILE_COLOR.test(p.accent) && PROFILE_COLOR.test(p.accent2) &&
+        typeof p.active === 'boolean');
+    if (!valid) return new Response('Invalid profile list', { status: 400 });
+    const clean = list.map(({ id, label, accent, accent2, active }) => ({ id, label, accent, accent2, active }));
+    await env.SESSIONS.put(key, JSON.stringify(clean));
+    return Response.json({ ok: true });
+  }
+
+  return new Response('Method not allowed', { status: 405 });
 }
 
 async function handleSessions(request, env) {

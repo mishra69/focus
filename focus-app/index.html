@@ -956,6 +956,71 @@
     }
     #lockscreen-sheet.visible { display: flex; }
 
+    /* Profiles sheet — same bottom-sheet chrome */
+    #profiles-sheet {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 250;
+      align-items: flex-end;
+      justify-content: center;
+    }
+    #profiles-sheet.visible { display: flex; }
+
+    .profile-list { display: flex; flex-direction: column; gap: 8px; }
+
+    .profile-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 10px 12px 10px 14px;
+    }
+    .profile-row.archived { opacity: 0.5; }
+
+    .profile-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+
+    .profile-name {
+      flex: 1;
+      min-width: 0;
+      font-size: 13px;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .profile-row-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--muted);
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 0.5px;
+      padding: 8px 12px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .profile-row-btn:disabled { opacity: 0.3; cursor: default; }
+
+    .profile-add-row { display: flex; gap: 8px; }
+    .profile-add-row input {
+      flex: 1;
+      min-width: 0;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 12px 14px;
+      color: var(--text);
+      font-family: 'DM Mono', monospace;
+      font-size: 16px; /* 16px stops iOS zooming the page on focus */
+      outline: none;
+    }
+    .profile-add-row input:focus { border-color: var(--accent); }
+
     .ls-toggle-row {
       display: flex;
       align-items: center;
@@ -1138,6 +1203,32 @@
   </div>
 </div>
 
+<!-- PROFILES -->
+<div id="profiles-sheet">
+  <div class="install-backdrop" onclick="closeProfilesSheet()"></div>
+  <div class="install-card">
+    <div class="install-header">
+      <div>
+        <div class="install-title">Profiles</div>
+        <div class="install-sub">SWITCH CONTEXT, KEEP ONE HISTORY</div>
+      </div>
+      <button class="install-dismiss" onclick="closeProfilesSheet()">×</button>
+    </div>
+
+    <div id="profileList" class="profile-list"></div>
+
+    <form class="profile-add-row" onsubmit="event.preventDefault(); addProfile();">
+      <input id="newProfileName" maxlength="24" placeholder="new profile" autocomplete="off" />
+      <button type="submit" class="profile-row-btn">ADD</button>
+    </form>
+
+    <div class="ls-toggle-sub">
+      Archiving hides a profile from the switcher but keeps its sessions — reports pool them under
+      ARCHIVED. Adding an archived profile's name again restores it, history included.
+    </div>
+  </div>
+</div>
+
 <!-- LOCK SCREEN TIMER SETUP -->
 <div id="lockscreen-sheet">
   <div class="install-backdrop" onclick="closeLockScreenSheet()"></div>
@@ -1215,6 +1306,7 @@
       <img class="user-avatar" id="userAvatar" src="" alt="" />
     </div>
     <div class="user-menu" id="userMenu">
+      <button class="user-menu-item" onclick="openProfilesSheet()">Profiles</button>
       <button class="user-menu-item" onclick="openLockScreenSheet()">Lock Screen timer</button>
       <button class="user-menu-item" onclick="doLogout()">Log out</button>
     </div>
@@ -1296,7 +1388,7 @@
     </div>
   </div>
 
-  <div class="period-toggle" id="profileFilter" style="align-self:flex-start"></div>
+  <div class="period-toggle" id="profileFilter" style="align-self:flex-start;flex-wrap:wrap;max-width:100%"></div>
 
   <div id="period-nav" style="display:none">
     <button class="period-nav-btn" onclick="navPeriod(-1)">&#8249;</button>
@@ -1543,25 +1635,50 @@ async function saveSession(durationSeconds, id, profile) {
 }
 // ── PROFILES ──
 // One account, many contexts. Sessions are *labelled*, not separated: weekly totals stay whole and
-// the report can still split them — something two Google accounts could never give you, on top of
-// the device-level leaks that sharing one phone between accounts would cause.
+// the report can still split them — something two Google accounts could never give you.
 //
 // Sticky by design: context switches happen over days, so the choice persists until changed rather
 // than being picked per session. Each profile repaints the accent colours, so which one you're in
 // is obvious at a glance instead of something you have to read.
-const PROFILES = [
-  { id: 'personal',  label: 'personal',  accent: '#c8f564', accent2: '#5b8df6' },
-  { id: 'interview', label: 'interview', accent: '#ffa94d', accent2: '#c084fc' }
+//
+// Profiles are data, managed from the Profiles sheet and stored server-side (so they follow the
+// account across devices), with a localStorage copy for first paint and offline use. They are never
+// deleted, only archived: a session is linked to its profile by id, so deleting one would orphan its
+// history. Archiving hides it from the switcher; its sessions stay reportable under ARCHIVED, and
+// adding the same name again restores it — history and all.
+
+// Preset accent pairs. Each `accent` must stay readable under the app's dark text, since buttons
+// use it as their background.
+const PROFILE_PALETTE = [
+  ['#c8f564', '#5b8df6'], ['#ffa94d', '#c084fc'], ['#4dd0e1', '#ff8a80'],
+  ['#f9a8d4', '#a3e635'], ['#facc15', '#38bdf8'], ['#a78bfa', '#34d399']
 ];
-const LS_PROFILE = 'focus_profile';
+const DEFAULT_PROFILES = [
+  { id: 'personal',  label: 'personal',  accent: '#c8f564', accent2: '#5b8df6', active: true },
+  { id: 'interview', label: 'interview', accent: '#ffa94d', accent2: '#c084fc', active: true }
+];
+const LS_PROFILE = 'focus_profile';          // the selected profile's id
+const LS_PROFILES = 'focus_profiles';        // cached list
+const LS_PROFILES_DIRTY = 'focus_profiles_dirty'; // edited while offline; push before pulling
 
 // Sessions recorded before profiles existed carry no field. They predate the split rather than
-// belonging to nothing, so they read as the first profile.
-const DEFAULT_PROFILE = PROFILES[0].id;
+// belonging to nothing, so they read as the original profile.
+const DEFAULT_PROFILE = 'personal';
+
+let PROFILES = (() => {
+  try {
+    const cached = JSON.parse(localStorage.getItem(LS_PROFILES) || 'null');
+    if (Array.isArray(cached) && cached.length) return cached;
+  } catch (e) {}
+  return DEFAULT_PROFILES.map(p => ({ ...p }));
+})();
+
+function activeProfiles() { return PROFILES.filter(p => p.active); }
 
 function currentProfile() {
   const id = localStorage.getItem(LS_PROFILE);
-  return PROFILES.find(p => p.id === id) || PROFILES[0];
+  const active = activeProfiles();
+  return active.find(p => p.id === id) || active[0] || PROFILES[0];
 }
 
 function profileOf(session) { return session.profile || DEFAULT_PROFILE; }
@@ -1575,20 +1692,157 @@ function applyProfileTheme() {
 }
 applyProfileTheme(); // before first paint, so the app never flashes the wrong profile's colours
 
-// Two profiles makes a cycling pill better than a menu — one tap, no chrome. Blocked mid-session:
-// a session's profile is fixed when it starts, and relabelling it halfway has no honest meaning.
-function cycleProfile() {
-  if (timerState !== 'idle') return;
-  const i = PROFILES.findIndex(p => p.id === currentProfile().id);
-  localStorage.setItem(LS_PROFILE, PROFILES[(i + 1) % PROFILES.length].id);
+// Repaint everything that depends on which profile is current.
+function profilesChanged() {
   applyProfileTheme();
   renderProfilePill();
   updateTodayStats();
+  if (document.getElementById('profiles-sheet').classList.contains('visible')) renderProfileList();
   if (document.getElementById('report-view').classList.contains('active')) renderReport();
+}
+
+// Cycles through active profiles only — one tap, no chrome. Blocked mid-session: a session's
+// profile is fixed when it starts, and relabelling it halfway has no honest meaning.
+function cycleProfile() {
+  if (timerState !== 'idle') return;
+  const active = activeProfiles();
+  if (active.length < 2) return;
+  const i = active.findIndex(p => p.id === currentProfile().id);
+  localStorage.setItem(LS_PROFILE, active[(i + 1) % active.length].id);
+  profilesChanged();
 }
 
 function renderProfilePill() {
   document.getElementById('profilePill').textContent = currentProfile().label;
+}
+
+// ── profile storage ──
+function cacheProfiles() {
+  try { localStorage.setItem(LS_PROFILES, JSON.stringify(PROFILES)); } catch (e) {}
+}
+
+async function pushProfiles() {
+  try {
+    const res = await fetch('/api/profiles', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(PROFILES)
+    });
+    if (!res.ok) throw new Error('status ' + res.status);
+    localStorage.removeItem(LS_PROFILES_DIRTY);
+  } catch (e) {
+    localStorage.setItem(LS_PROFILES_DIRTY, '1'); // retried on next boot
+  }
+}
+
+function saveProfiles() {
+  cacheProfiles();
+  pushProfiles();
+}
+
+// At boot: an offline edit is pushed first (otherwise the pull below would silently undo it); an
+// account with nothing stored yet is seeded from this device's list.
+async function syncProfiles() {
+  try {
+    if (localStorage.getItem(LS_PROFILES_DIRTY)) await pushProfiles();
+    const res = await fetch('/api/profiles');
+    if (!res.ok) return;
+    const remote = await res.json();
+    if (Array.isArray(remote) && remote.length) {
+      PROFILES = remote;
+      cacheProfiles();
+      profilesChanged();
+    } else {
+      await pushProfiles();
+    }
+  } catch (e) {}
+}
+
+// ── profile management ──
+function openProfilesSheet() {
+  document.getElementById('userMenu').classList.remove('open');
+  renderProfileList();
+  document.getElementById('profiles-sheet').classList.add('visible');
+}
+
+function closeProfilesSheet() {
+  document.getElementById('profiles-sheet').classList.remove('visible');
+}
+
+function renderProfileList() {
+  const list = document.getElementById('profileList');
+  list.innerHTML = '';
+  const current = currentProfile().id;
+  const activeCount = activeProfiles().length;
+  // Active first, then archived; creation order within each.
+  [...activeProfiles(), ...PROFILES.filter(p => !p.active)].forEach(p => {
+    const row = document.createElement('div');
+    row.className = 'profile-row' + (p.active ? '' : ' archived');
+
+    const dot = document.createElement('span');
+    dot.className = 'profile-dot';
+    dot.style.background = p.accent;
+
+    const name = document.createElement('span');
+    name.className = 'profile-name';
+    name.textContent = p.label + (p.id === current ? '  · current' : '');
+
+    const btn = document.createElement('button');
+    btn.className = 'profile-row-btn';
+    btn.textContent = p.active ? 'ARCHIVE' : 'RESTORE';
+    // At least one profile must stay active, and the one a running session belongs to can't go.
+    const locked = p.active && (activeCount === 1 || (p.id === current && timerState !== 'idle'));
+    btn.disabled = locked;
+    btn.onclick = () => p.active ? archiveProfile(p.id) : restoreProfile(p.id);
+
+    row.append(dot, name, btn);
+    list.appendChild(row);
+  });
+}
+
+function addProfile() {
+  const input = document.getElementById('newProfileName');
+  const label = input.value.trim().slice(0, 24);
+  if (!label) return;
+  const existing = PROFILES.find(p => p.label.toLowerCase() === label.toLowerCase());
+  if (existing) {
+    if (existing.active) { showToast(`"${existing.label}" already exists`, 'discard'); return; }
+    input.value = '';
+    restoreProfile(existing.id); // same name as an archived one → bring it back, history intact
+    showToast(`"${existing.label}" restored`, 'success');
+    return;
+  }
+  // Prefer a colour pair no active profile is using, so profiles stay distinguishable.
+  const used = new Set(activeProfiles().map(p => p.accent));
+  const [accent, accent2] =
+    PROFILE_PALETTE.find(([a]) => !used.has(a)) || PROFILE_PALETTE[PROFILES.length % PROFILE_PALETTE.length];
+  // The id is not derived from the label, so it never collides with an archived profile's id and
+  // a future rename wouldn't detach history.
+  const id = 'p' + Date.now().toString(36);
+  PROFILES.push({ id, label, accent, accent2, active: true });
+  input.value = '';
+  saveProfiles();
+  profilesChanged();
+}
+
+function archiveProfile(id) {
+  const p = PROFILES.find(x => x.id === id);
+  if (!p || !p.active) return;
+  if (activeProfiles().length === 1) return;
+  const wasCurrent = currentProfile().id === id;
+  if (wasCurrent && timerState !== 'idle') return;
+  p.active = false;
+  if (wasCurrent) localStorage.setItem(LS_PROFILE, activeProfiles()[0].id);
+  saveProfiles();
+  profilesChanged();
+}
+
+function restoreProfile(id) {
+  const p = PROFILES.find(x => x.id === id);
+  if (!p || p.active) return;
+  p.active = true;
+  saveProfiles();
+  profilesChanged();
 }
 
 // ── LAST-USED SETUP ──
@@ -1627,7 +1881,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20261001_1040';
+const VERSION = '20261001_1102';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -2156,14 +2410,32 @@ function navPeriod(dir) {
 // working in one context while reviewing another, or comparing both via ALL.
 let reportProfile = 'all';
 
+// Report filter: ALL, each active profile, and ARCHIVED — every archived profile pooled into one
+// bucket, since the point of archiving is that it no longer warrants its own row. Sessions whose
+// profile id isn't in the list at all fall into ARCHIVED too, so nothing is ever unreachable.
+function isArchivedProfileId(pid) { return !activeProfiles().some(p => p.id === pid); }
+
+function matchesReportProfile(s) {
+  if (reportProfile === 'all') return true;
+  const pid = profileOf(s);
+  if (reportProfile === 'archived') return isArchivedProfileId(pid);
+  return pid === reportProfile;
+}
+
 function renderProfileFilter() {
   const row = document.getElementById('profileFilter');
   row.innerHTML = '';
-  [{ id: 'all', label: 'all' }].concat(PROFILES).forEach(p => {
+  const options = [{ id: 'all', label: 'all' }, ...activeProfiles()];
+  const hasArchived = PROFILES.some(p => !p.active) ||
+    sessions.some(s => isArchivedProfileId(profileOf(s)));
+  if (hasArchived) options.push({ id: 'archived', label: 'archived' });
+  // The selected filter can vanish (its profile was archived elsewhere) — fall back to ALL.
+  if (!options.some(o => o.id === reportProfile)) reportProfile = 'all';
+  options.forEach(p => {
     const b = document.createElement('button');
     b.className = 'period-btn' + (reportProfile === p.id ? ' active' : '');
     b.textContent = p.label.toUpperCase();
-    b.onclick = () => { reportProfile = p.id; renderProfileFilter(); renderReport(); };
+    b.onclick = () => { reportProfile = p.id; renderReport(); };
     row.appendChild(b);
   });
 }
@@ -2229,7 +2501,7 @@ function getFilteredData(period) {
   const filtered = sessions.filter(s => {
     const d = new Date(s.date);
     if (d < start || d > end) return false;
-    return reportProfile === 'all' || profileOf(s) === reportProfile;
+    return matchesReportProfile(s);
   });
 
   // Build buckets
@@ -2866,6 +3138,7 @@ async function boot() {
     avatar.alt = user.name;
     document.getElementById('userPill').style.display = 'flex';
     ensurePushSubscription(false); // re-sync an existing subscription; never prompts here
+    syncProfiles(); // not awaited: the cached list already painted; this only corrects it
   }
 
   init();
