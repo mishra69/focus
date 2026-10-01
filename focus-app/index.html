@@ -117,6 +117,26 @@
       gap: 8px;
     }
 
+    .pill-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Accent-coloured so it carries the active profile's identity, not just its name. */
+    .profile-pill {
+      background: var(--surface);
+      border: 1px solid var(--accent);
+      border-radius: 100px;
+      padding: 5px 14px;
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      color: var(--accent);
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      transition: opacity 0.2s, border-color 0.3s, color 0.3s;
+    }
+
     .today-pill {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -1204,7 +1224,10 @@
 <!-- TIMER VIEW -->
 <div id="timer-view" class="view active">
   <div class="timer-top">
-    <div class="today-pill" id="todayDate">today</div>
+    <div class="pill-row">
+      <button class="profile-pill" id="profilePill" onclick="cycleProfile()">personal</button>
+      <div class="today-pill" id="todayDate">today</div>
+    </div>
     <div class="today-stats">
       <div class="today-stat">
         <span class="today-stat-val" id="todayHours">0m</span>
@@ -1272,6 +1295,8 @@
       <button class="period-btn" onclick="setPeriod('year')">YEAR</button>
     </div>
   </div>
+
+  <div class="period-toggle" id="profileFilter" style="align-self:flex-start"></div>
 
   <div id="period-nav" style="display:none">
     <button class="period-nav-btn" onclick="navPeriod(-1)">&#8249;</button>
@@ -1399,7 +1424,8 @@ function activePayload() {
   return {
     startTime: new Date(timerStartedAt).toISOString(),
     mode: timerMode,
-    duration: timerMode === 'countdown' ? totalSeconds : null
+    duration: timerMode === 'countdown' ? totalSeconds : null,
+    profile: currentProfile().id // so a session recovered after an app kill is filed correctly
   };
 }
 
@@ -1455,8 +1481,15 @@ async function loadSessions() {
 // `id` is optional: recovery/finalize paths pass a deterministic id derived from the session's
 // start time, so the same real session can never be banked twice (server dedupes by id, and the
 // in-memory guard below stops a local double). Normal live saves omit it and use Date.now().
-async function saveSession(durationSeconds, id) {
-  const session = { id: id || Date.now(), date: new Date().toISOString(), duration: durationSeconds };
+// `profile` is passed explicitly only when recovering a session the app didn't watch start — it
+// must be filed under the profile that was active *then*, not whatever is selected now.
+async function saveSession(durationSeconds, id, profile) {
+  const session = {
+    id: id || Date.now(),
+    date: new Date().toISOString(),
+    duration: durationSeconds,
+    profile: profile || currentProfile().id
+  };
   if (sessions.some(s => s.id === session.id)) return; // already recorded
   sessions.unshift(session);
   dlog('save', { id: session.id, dur: durationSeconds });
@@ -1473,6 +1506,56 @@ async function saveSession(durationSeconds, id) {
     dlog('save-queued', { id: session.id });
   }
 }
+// ── PROFILES ──
+// One account, many contexts. Sessions are *labelled*, not separated: weekly totals stay whole and
+// the report can still split them — something two Google accounts could never give you, on top of
+// the device-level leaks that sharing one phone between accounts would cause.
+//
+// Sticky by design: context switches happen over days, so the choice persists until changed rather
+// than being picked per session. Each profile repaints the accent colours, so which one you're in
+// is obvious at a glance instead of something you have to read.
+const PROFILES = [
+  { id: 'personal',  label: 'personal',  accent: '#c8f564', accent2: '#5b8df6' },
+  { id: 'interview', label: 'interview', accent: '#ffa94d', accent2: '#c084fc' }
+];
+const LS_PROFILE = 'focus_profile';
+
+// Sessions recorded before profiles existed carry no field. They predate the split rather than
+// belonging to nothing, so they read as the first profile.
+const DEFAULT_PROFILE = PROFILES[0].id;
+
+function currentProfile() {
+  const id = localStorage.getItem(LS_PROFILE);
+  return PROFILES.find(p => p.id === id) || PROFILES[0];
+}
+
+function profileOf(session) { return session.profile || DEFAULT_PROFILE; }
+
+// Overrides the two accent variables the whole stylesheet is built on, so one assignment re-themes
+// the ring, bars, stat figures and buttons together.
+function applyProfileTheme() {
+  const p = currentProfile();
+  document.documentElement.style.setProperty('--accent', p.accent);
+  document.documentElement.style.setProperty('--accent2', p.accent2);
+}
+applyProfileTheme(); // before first paint, so the app never flashes the wrong profile's colours
+
+// Two profiles makes a cycling pill better than a menu — one tap, no chrome. Blocked mid-session:
+// a session's profile is fixed when it starts, and relabelling it halfway has no honest meaning.
+function cycleProfile() {
+  if (timerState !== 'idle') return;
+  const i = PROFILES.findIndex(p => p.id === currentProfile().id);
+  localStorage.setItem(LS_PROFILE, PROFILES[(i + 1) % PROFILES.length].id);
+  applyProfileTheme();
+  renderProfilePill();
+  updateTodayStats();
+  if (document.getElementById('report-view').classList.contains('active')) renderReport();
+}
+
+function renderProfilePill() {
+  document.getElementById('profilePill').textContent = currentProfile().label;
+}
+
 // ── LAST-USED SETUP ──
 // Reopen with the mode and duration you last chose, so a habitual 45-minute countdown doesn't
 // need re-dialling every time. Expires, so one unusual session doesn't become the new default
@@ -1509,7 +1592,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20260909_1932';
+const VERSION = '20261001_0958';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
@@ -1646,6 +1729,7 @@ function init() {
   ver.title = 'tap to send a test notification';
   ver.addEventListener('click', testPush); // hidden debug affordance
   updateTodayDate();
+  renderProfilePill();
   updateTodayStats();
   // Restore the last-used duration (or 30 min once the TTL has lapsed).
   const step = Math.min(12, Math.max(1, Math.round(selectedDuration / 10)));
@@ -1737,6 +1821,9 @@ function setRunningUI() {
   updateSliderVisibility();
   document.getElementById('modeToggle').style.opacity = '0.3';
   document.getElementById('modeToggle').style.pointerEvents = 'none';
+  // A session's profile is fixed at start, so the switcher is inert until it ends.
+  document.getElementById('profilePill').style.opacity = '0.3';
+  document.getElementById('profilePill').style.pointerEvents = 'none';
   // Lock down navigation during a session — only ending it should be active
   setNavEnabled(false);
   document.getElementById('timerLabel').textContent = 'FOCUSING';
@@ -1898,6 +1985,8 @@ function resetTimer() {
   updateSliderVisibility();
   document.getElementById('modeToggle').style.opacity = '1';
   document.getElementById('modeToggle').style.pointerEvents = 'auto';
+  document.getElementById('profilePill').style.opacity = '1';
+  document.getElementById('profilePill').style.pointerEvents = 'auto';
   setNavEnabled(true);
   document.getElementById('timerLabel').textContent = 'READY';
   updateDisplay();
@@ -1959,7 +2048,11 @@ function confirmDialog(title, body, okText, cancelText) {
 
 function updateTodayStats() {
   const today = new Date().toDateString();
-  const todaySessions = sessions.filter(s => new Date(s.date).toDateString() === today);
+  // Scoped to the active profile, matching the themed screen it sits on — "how much interview prep
+  // today", not a diluted combined figure. The report's ALL filter is where totals live.
+  const profile = currentProfile().id;
+  const todaySessions = sessions.filter(s =>
+    new Date(s.date).toDateString() === today && profileOf(s) === profile);
   const totalMins = todaySessions.reduce((a, s) => a + s.duration, 0) / 60;
   document.getElementById('todayHours').textContent = `${Math.round(totalMins)}m`;
   document.getElementById('todaySessions').textContent = todaySessions.length;
@@ -2024,7 +2117,24 @@ function navPeriod(dir) {
   renderReport();
 }
 
+// Which profile the report is showing. Independent of the sticky timer profile: you may well be
+// working in one context while reviewing another, or comparing both via ALL.
+let reportProfile = 'all';
+
+function renderProfileFilter() {
+  const row = document.getElementById('profileFilter');
+  row.innerHTML = '';
+  [{ id: 'all', label: 'all' }].concat(PROFILES).forEach(p => {
+    const b = document.createElement('button');
+    b.className = 'period-btn' + (reportProfile === p.id ? ' active' : '');
+    b.textContent = p.label.toUpperCase();
+    b.onclick = () => { reportProfile = p.id; renderProfileFilter(); renderReport(); };
+    row.appendChild(b);
+  });
+}
+
 function renderReport() {
+  renderProfileFilter();
   const { filtered, days } = getFilteredData(currentPeriod);
   renderStats(filtered, currentPeriod);
   renderBarChart(days, currentPeriod);
@@ -2083,7 +2193,8 @@ function getFilteredData(period) {
 
   const filtered = sessions.filter(s => {
     const d = new Date(s.date);
-    return d >= start && d <= end;
+    if (d < start || d > end) return false;
+    return reportProfile === 'all' || profileOf(s) === reportProfile;
   });
 
   // Build buckets
@@ -2635,7 +2746,7 @@ async function recoverActive(active, source) {
     if (elapsed >= active.duration) {
       // Finished while the page was dead — credit the full session
       alog('recover-complete', { ...base, mode: 'countdown', credited: active.duration });
-      await saveSession(active.duration);
+      await saveSession(active.duration, null, active.profile);
       await clearActive();
       flashScreen();
       showToast('session complete 🎉', 'success');
@@ -2662,7 +2773,7 @@ async function recoverActive(active, source) {
     );
     if (keep) {
       alog('recover-abandoned-save', { ...base, credited: elapsed, id: detId });
-      await saveSession(elapsed, detId); // credit the REAL elapsed, not a cap
+      await saveSession(elapsed, detId, active.profile); // credit the REAL elapsed, not a cap
       showToast('session saved ✓', 'success');
     } else {
       alog('recover-abandoned-discard', { ...base });
