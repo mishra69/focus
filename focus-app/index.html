@@ -1238,7 +1238,7 @@
     </form>
 
     <div class="ls-toggle-sub">
-      Tap a name to rename it. Archiving hides a profile from the switcher but keeps its sessions — reports pool them under
+      Tap a name to rename it. MIN is the smallest countdown that profile's slider offers. Archiving hides a profile from the switcher but keeps its sessions — reports pool them under
       ARCHIVED. Adding an archived profile's name again restores it, history included.
     </div>
   </div>
@@ -1372,13 +1372,7 @@
       </div>
       <input type="range" id="durationSlider" min="1" max="12" step="1" value="3"
         oninput="onSlider(this.value, true)" />
-      <div class="slider-ticks">
-        <span class="slider-tick" style="left: 11px">10</span>
-        <span class="slider-tick" style="left: calc((100% - 22px) * 0.18182 + 11px)">30</span>
-        <span class="slider-tick" style="left: calc((100% - 22px) * 0.45455 + 11px)">60</span>
-        <span class="slider-tick" style="left: calc((100% - 22px) * 0.72727 + 11px)">90</span>
-        <span class="slider-tick" style="left: calc(100% - 11px)">120</span>
-      </div>
+      <div class="slider-ticks" id="sliderTicks"></div>
     </div>
 
     <a class="btn-primary" id="mainBtn" role="button" onclick="handleMainBtn(event)">START FOCUS</a>
@@ -1710,6 +1704,7 @@ applyProfileTheme(); // before first paint, so the app never flashes the wrong p
 // Repaint everything that depends on which profile is current.
 function profilesChanged() {
   applyProfileTheme();
+  configureSlider(); // the step may differ per profile
   renderProfilePill();
   updateTodayStats();
   if (document.getElementById('profiles-sheet').classList.contains('visible')) renderProfileList();
@@ -1812,7 +1807,16 @@ function renderProfileList() {
     btn.disabled = locked;
     btn.onclick = () => p.active ? archiveProfile(p.id) : restoreProfile(p.id);
 
-    row.append(dot, name, btn);
+    if (p.active) {
+      const stepBtn = document.createElement('button');
+      stepBtn.className = 'profile-row-btn';
+      stepBtn.textContent = `MIN ${profileStep(p)}m`;
+      stepBtn.title = 'Smallest countdown you can set — tap to change';
+      stepBtn.onclick = () => cycleProfileStep(p.id);
+      row.append(dot, name, stepBtn, btn);
+    } else {
+      row.append(dot, name, btn);
+    }
     list.appendChild(row);
   });
 }
@@ -1850,6 +1854,15 @@ function renameProfile(id, raw) {
   const clash = PROFILES.find(x => x.id !== id && x.label.toLowerCase() === label.toLowerCase());
   if (clash) { showToast(`"${clash.label}" already exists`, 'discard'); return; }
   p.label = label;
+  saveProfiles();
+  profilesChanged();
+}
+
+function cycleProfileStep(id) {
+  const p = PROFILES.find(x => x.id === id);
+  if (!p) return;
+  const i = STEP_OPTIONS.indexOf(profileStep(p));
+  p.minStep = STEP_OPTIONS[(i + 1) % STEP_OPTIONS.length];
   saveProfiles();
   profilesChanged();
 }
@@ -1935,11 +1948,53 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20261008_1939';
+const VERSION = '20261008_2003';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
-// Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
-function sliderToMin(val) { return val * 10; }
+// ── COUNTDOWN SLIDER ──
+// Positions are multiples of the current profile's step, from one step up to 120 min. The step is
+// per profile because the smallest useful countdown differs by context — deep work rarely wants
+// under 10 min, a chore might be 5.
+const STEP_OPTIONS = [5, 10, 15];
+const MAX_COUNTDOWN_MINS = 120;
+
+function profileStep(p = currentProfile()) {
+  return STEP_OPTIONS.includes(p.minStep) ? p.minStep : 10;
+}
+function sliderToMin(val) { return val * profileStep(); }
+function minToSlider(mins) {
+  const st = profileStep();
+  return Math.min(MAX_COUNTDOWN_MINS / st, Math.max(1, Math.round(mins / st)));
+}
+
+// Rebuild the slider for the current profile's step and snap the selected duration onto it.
+// Idle only: a running countdown keeps the length it started with.
+function configureSlider() {
+  if (timerState !== 'idle') return;
+  const slider = document.getElementById('durationSlider');
+  slider.max = MAX_COUNTDOWN_MINS / profileStep();
+  const pos = minToSlider(selectedDuration);
+  slider.value = pos;
+  renderSliderTicks();
+  onSlider(pos);
+}
+
+// Labels sit under the thumb's centre for their value. The thumb travels from 11px to
+// (100% - 11px) — half its 22px width in from each edge — so that's the span positions map onto.
+function renderSliderTicks() {
+  const st = profileStep();
+  const positions = MAX_COUNTDOWN_MINS / st;
+  const wrap = document.getElementById('sliderTicks');
+  wrap.innerHTML = '';
+  [...new Set([st, 30, 60, 90, 120])].filter(v => v % st === 0).forEach(v => {
+    const frac = (v / st - 1) / (positions - 1);
+    const el = document.createElement('span');
+    el.className = 'slider-tick';
+    el.textContent = v;
+    el.style.left = `calc((100% - 22px) * ${frac.toFixed(5)} + 11px)`;
+    wrap.appendChild(el);
+  });
+}
 
 // Slider is irrelevant in count-up mode (no fixed duration), so hide it entirely; it stays laid
 // out (visibility, not display) so the mode toggle/button above and below it don't shift position.
@@ -2074,10 +2129,8 @@ function init() {
   updateTodayDate();
   renderProfilePill();
   updateTodayStats();
-  // Restore the last-used duration (or 30 min once the TTL has lapsed).
-  const step = Math.min(12, Math.max(1, Math.round(selectedDuration / 10)));
-  document.getElementById('durationSlider').value = step;
-  onSlider(step);
+  // Restore the last-used duration (or 30 min once the TTL has lapsed), on this profile's step.
+  configureSlider();
   // Restore last used mode
   if (timerMode === 'countup') {
     document.querySelectorAll('.mode-btn').forEach(b =>
@@ -2209,13 +2262,9 @@ function resumeSession(active) {
   );
 
   if (timerMode === 'countdown') {
-    const mins = Math.round(active.duration / 60);
-    const step = mins / 10;
-    if (step >= 1 && step <= 12) {
-      document.getElementById('durationSlider').value = step;
-      onSlider(step);
-    }
-    totalSeconds = active.duration;
+    selectedDuration = Math.round(active.duration / 60);
+    configureSlider(); // still idle here, so the slider shows (the nearest step to) its length
+    totalSeconds = active.duration; // ...but the session keeps its exact original length
   } else {
     document.getElementById('ringProgress').style.strokeDashoffset = CIRCUMFERENCE;
   }
@@ -2332,6 +2381,7 @@ function resetTimer() {
   document.getElementById('profilePill').style.pointerEvents = 'auto';
   setNavEnabled(true);
   document.getElementById('timerLabel').textContent = 'READY';
+  configureSlider(); // apply a step that was changed while the session ran
   updateDisplay();
   updateShortcutLinks();
   updateTodayStats();
@@ -2460,9 +2510,10 @@ function navPeriod(dir) {
   renderReport();
 }
 
-// Which profile the report is showing. Independent of the sticky timer profile: you may well be
-// working in one context while reviewing another, or comparing both via ALL.
-let reportProfile = 'all';
+// Which profiles the report combines. Independent of the sticky timer profile: you may well be
+// working in one context while reviewing another. Empty means ALL; otherwise the chart and stats
+// show the selected profiles summed together.
+let reportProfiles = new Set();
 
 // Report filter: ALL, each active profile, and ARCHIVED — every archived profile pooled into one
 // bucket, since the point of archiving is that it no longer warrants its own row. Sessions whose
@@ -2470,10 +2521,9 @@ let reportProfile = 'all';
 function isArchivedProfileId(pid) { return !activeProfiles().some(p => p.id === pid); }
 
 function matchesReportProfile(s) {
-  if (reportProfile === 'all') return true;
+  if (!reportProfiles.size) return true;
   const pid = profileOf(s);
-  if (reportProfile === 'archived') return isArchivedProfileId(pid);
-  return pid === reportProfile;
+  return reportProfiles.has(pid) || (reportProfiles.has('archived') && isArchivedProfileId(pid));
 }
 
 function renderProfileFilter() {
@@ -2483,13 +2533,23 @@ function renderProfileFilter() {
   const hasArchived = PROFILES.some(p => !p.active) ||
     sessions.some(s => isArchivedProfileId(profileOf(s)));
   if (hasArchived) options.push({ id: 'archived', label: 'archived' });
-  // The selected filter can vanish (its profile was archived elsewhere) — fall back to ALL.
-  if (!options.some(o => o.id === reportProfile)) reportProfile = 'all';
+  // A selected profile can vanish (archived since) — drop it; an emptied selection reads as ALL.
+  for (const id of [...reportProfiles]) {
+    if (!options.some(o => o.id === id)) reportProfiles.delete(id);
+  }
+  // Chips toggle in and out of the selection; ALL clears it.
   options.forEach(p => {
+    const isAll = p.id === 'all';
+    const on = isAll ? reportProfiles.size === 0 : reportProfiles.has(p.id);
     const b = document.createElement('button');
-    b.className = 'period-btn' + (reportProfile === p.id ? ' active' : '');
+    b.className = 'period-btn' + (on ? ' active' : '');
     b.textContent = p.label.toUpperCase();
-    b.onclick = () => { reportProfile = p.id; renderReport(); };
+    b.onclick = () => {
+      if (isAll) reportProfiles.clear();
+      else if (reportProfiles.has(p.id)) reportProfiles.delete(p.id);
+      else reportProfiles.add(p.id);
+      renderReport();
+    };
     row.appendChild(b);
   });
 }

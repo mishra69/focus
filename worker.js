@@ -135,9 +135,11 @@ async function handleProfiles(request, env) {
       list.every(p => p && typeof p.id === 'string' && p.id.length <= 40 &&
         typeof p.label === 'string' && p.label.trim() && p.label.length <= 24 &&
         PROFILE_COLOR.test(p.accent) && PROFILE_COLOR.test(p.accent2) &&
-        typeof p.active === 'boolean');
+        typeof p.active === 'boolean' &&
+        (p.minStep === undefined || [5, 10, 15].includes(p.minStep)));
     if (!valid) return new Response('Invalid profile list', { status: 400 });
-    const clean = list.map(({ id, label, accent, accent2, active }) => ({ id, label, accent, accent2, active }));
+    const clean = list.map(({ id, label, accent, accent2, active, minStep }) =>
+      ({ id, label, accent, accent2, active, ...(minStep ? { minStep } : {}) }));
     await env.SESSIONS.put(key, JSON.stringify(clean));
     return Response.json({ ok: true });
   }
