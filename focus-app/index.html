@@ -992,6 +992,21 @@
       white-space: nowrap;
     }
 
+    .profile-name { cursor: text; }
+
+    .profile-rename {
+      flex: 1;
+      min-width: 0;
+      background: var(--surface);
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      padding: 6px 8px;
+      color: var(--text);
+      font-family: 'DM Mono', monospace;
+      font-size: 16px; /* 16px stops iOS zooming the page on focus */
+      outline: none;
+    }
+
     .profile-row-btn {
       background: transparent;
       border: 1px solid var(--border);
@@ -1223,7 +1238,7 @@
     </form>
 
     <div class="ls-toggle-sub">
-      Archiving hides a profile from the switcher but keeps its sessions — reports pool them under
+      Tap a name to rename it. Archiving hides a profile from the switcher but keeps its sessions — reports pool them under
       ARCHIVED. Adding an archived profile's name again restores it, history included.
     </div>
   </div>
@@ -1786,6 +1801,8 @@ function renderProfileList() {
     const name = document.createElement('span');
     name.className = 'profile-name';
     name.textContent = p.label + (p.id === current ? '  · current' : '');
+    name.title = 'Tap to rename';
+    name.onclick = () => startRename(row, name, p);
 
     const btn = document.createElement('button');
     btn.className = 'profile-row-btn';
@@ -1798,6 +1815,43 @@ function renderProfileList() {
     row.append(dot, name, btn);
     list.appendChild(row);
   });
+}
+
+// Tap a name to edit it in place. Only the label changes — sessions reference the profile by id,
+// so a rename relabels its whole history and moves nothing.
+function startRename(row, nameEl, p) {
+  const input = document.createElement('input');
+  input.className = 'profile-rename';
+  input.value = p.label;
+  input.maxLength = 24;
+  let done = false;
+  const finish = (commit) => {
+    if (done) return;
+    done = true;
+    if (commit) renameProfile(p.id, input.value);
+    renderProfileList();
+  };
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') finish(false);
+  };
+  input.onblur = () => finish(true);
+  row.replaceChild(input, nameEl);
+  input.focus();
+  input.select();
+}
+
+function renameProfile(id, raw) {
+  const p = PROFILES.find(x => x.id === id);
+  const label = (raw || '').trim().slice(0, 24);
+  if (!p || !label || label === p.label) return;
+  // Names stay unique (case-insensitively), archived ones included — adding an archived profile's
+  // name is how it gets restored, so two profiles sharing a name would make that ambiguous.
+  const clash = PROFILES.find(x => x.id !== id && x.label.toLowerCase() === label.toLowerCase());
+  if (clash) { showToast(`"${clash.label}" already exists`, 'discard'); return; }
+  p.label = label;
+  saveProfiles();
+  profilesChanged();
 }
 
 function addProfile() {
@@ -1881,7 +1935,7 @@ let intervalId = null;
 let timerStartedAt = null;   // wall-clock start time
 let pausedElapsed = 0;       // seconds accumulated before a pause
 
-const VERSION = '20261001_1102';
+const VERSION = '20261008_1939';
 const CIRCUMFERENCE = 2 * Math.PI * 110; // 691
 
 // Slider: steps 1–12 = 10,20,30,40,50,60,70,80,90,100,110,120 min
